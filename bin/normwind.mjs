@@ -8,6 +8,10 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import * as bundledBabelParser from "@babel/parser";
+import bundledTailwindGroupsModule from "eslint-plugin-tailwindcss/lib/config/groups.js";
+import * as bundledTailwind from "tailwindcss";
+import bundledTailwindPackage from "tailwindcss/package.json" with { type: "json" };
 
 const execFileAsync = promisify(execFile);
 const PACKAGE_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -77,6 +81,30 @@ const IGNORED_EXACT_PATHS = new Set(["infra/aws/bin/app.js"]);
 const CACHE_FILE = path.resolve(process.cwd(), "node_modules/.cache/normwinds/canonical-cache.json");
 const CACHE_SCHEMA_VERSION = 1;
 const MAX_CACHE_FILE_BYTES = 8 * 1024 * 1024;
+const ACTION_WORKSPACE_ROOT = process.env.NORMWIND_ACTION_WORKSPACE
+    ? path.resolve(process.env.NORMWIND_ACTION_WORKSPACE)
+    : null;
+const ACTION_MAX_FILES = 20_000;
+const ACTION_MAX_TOTAL_SOURCE_BYTES = 256 * 1024 * 1024;
+const ACTION_MAX_THEME_FILES = 100;
+const ACTION_MAX_THEME_BYTES = 5 * 1024 * 1024;
+
+function isInsidePath(parent, child) {
+    const relative = path.relative(parent, child);
+    return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+}
+
+function assertInsideActionWorkspace(filePath, label) {
+    if (ACTION_WORKSPACE_ROOT && !isInsidePath(ACTION_WORKSPACE_ROOT, filePath)) {
+        throw new Error(`normwinds: ${label} escapes the checked-out workspace: ${filePath}`);
+    }
+}
+
+async function resolveActionSafePath(filePath, label) {
+    const realPath = await fs.realpath(filePath);
+    assertInsideActionWorkspace(realPath, label);
+    return realPath;
+}
 
 let tailwindModuleCache = null;
 
@@ -88,27 +116,30 @@ function resolveTailwindRuntime() {
     // Resolve from cwd first so local installs, npx runs, and monorepo package
     // directories all use the Tailwind version that will actually build the
     // scanned source.
-    try {
-        const projectRequire = createRequire(path.resolve(process.cwd(), "package.json"));
-        const projectPkg = projectRequire("tailwindcss/package.json");
-        const major = Number.parseInt(String(projectPkg?.version ?? "").split(".")[0], 10);
-        if (major === 4) {
-            return {
-                tailwind: projectRequire("tailwindcss"),
-                tailwindPkg: projectPkg,
-                tailwindRequire: projectRequire,
-                source: "project",
-            };
+    if (process.env.NORMWIND_FORCE_BUNDLED_RUNTIME !== "1") {
+        try {
+            const projectRequire = createRequire(path.resolve(process.cwd(), "package.json"));
+            const projectPkg = projectRequire("tailwindcss/package.json");
+            const major = Number.parseInt(String(projectPkg?.version ?? "").split(".")[0], 10);
+            if (major === 4) {
+                return {
+                    tailwind: projectRequire("tailwindcss"),
+                    tailwindPkg: projectPkg,
+                    tailwindRequire: projectRequire,
+                    source: "project",
+                };
+            }
+        } catch {
+            // A project-local Tailwind install is optional. The bundled engine
+            // preserves standalone/global operation and existing zero-config use.
         }
-    } catch {
-        // A project-local Tailwind install is optional. The bundled engine
-        // preserves standalone/global operation and existing zero-config use.
     }
 
     return {
-        tailwind: bundledRequire("tailwindcss"),
-        tailwindPkg: bundledRequire("tailwindcss/package.json"),
+        tailwind: bundledTailwind,
+        tailwindPkg: bundledTailwindPackage,
         tailwindRequire: bundledRequire,
+        tailwindIndexCssPath: process.env.NORMWIND_BUNDLED_TAILWIND_CSS || null,
         source: "bundled",
     };
 }
@@ -118,7 +149,7 @@ function loadTailwind() {
         const runtime = resolveTailwindRuntime();
         tailwindModuleCache = {
             ...runtime,
-            tailwindGroups: bundledRequire("eslint-plugin-tailwindcss/lib/config/groups").groups,
+            tailwindGroups: bundledTailwindGroupsModule.groups,
         };
     }
     return tailwindModuleCache;
@@ -128,8 +159,8 @@ let designSystemPromise = null;
 async function loadTailwindDesignSystem() {
     if (!designSystemPromise) {
         designSystemPromise = (async () => {
-            const { tailwind, tailwindRequire } = loadTailwind();
-            const tailwindIndexCssPath = tailwindRequire.resolve("tailwindcss/index.css");
+            const { tailwind, tailwindRequire, tailwindIndexCssPath: configuredCssPath } = loadTailwind();
+            const tailwindIndexCssPath = configuredCssPath || tailwindRequire.resolve("tailwindcss/index.css");
             const css = await fs.readFile(tailwindIndexCssPath, "utf8");
             const designSystem = await tailwind.__unstable__loadDesignSystem(css, {
                 from: tailwindIndexCssPath,
@@ -153,10 +184,28 @@ function isLocalCssImportSpecifier(spec) {
     return spec.startsWith("./") || spec.startsWith("../") || spec.startsWith("/");
 }
 
+async function readThemeCssSource(filePath, budget) {
+    const stats = await fs.stat(filePath);
+    if (!stats.isFile()) {
+        throw new Error(`normwinds: theme CSS path is not a regular file: ${filePath}`);
+    }
+    if (ACTION_WORKSPACE_ROOT) {
+        budget.files += 1;
+        budget.bytes += stats.size;
+        if (budget.files > ACTION_MAX_THEME_FILES) {
+            throw new Error(`normwinds: theme CSS import graph exceeds the Action limit of ${ACTION_MAX_THEME_FILES} files`);
+        }
+        if (budget.bytes > ACTION_MAX_THEME_BYTES) {
+            throw new Error(`normwinds: theme CSS import graph exceeds the Action limit of ${ACTION_MAX_THEME_BYTES} bytes`);
+        }
+    }
+    return fs.readFile(filePath, "utf8");
+}
+
 // Recursively inline local @import directives into the source CSS so
 // Tailwind's design-system loader sees the project's @theme blocks even when
 // they live in files imported from the entry CSS.
-async function inlineLocalCssImports(sourceCss, sourcePath, visited) {
+async function inlineLocalCssImports(sourceCss, sourcePath, visited, budget) {
     const sourceDir = path.dirname(sourcePath);
     const parts = [];
     let lastIndex = 0;
@@ -177,7 +226,17 @@ async function inlineLocalCssImports(sourceCss, sourcePath, visited) {
             continue;
         }
 
-        const importedAbs = path.resolve(sourceDir, spec);
+        const importedCandidate = path.resolve(sourceDir, spec);
+        let importedAbs;
+        try {
+            importedAbs = ACTION_WORKSPACE_ROOT
+                ? await resolveActionSafePath(importedCandidate, `CSS import "${spec}"`)
+                : importedCandidate;
+        } catch (error) {
+            throw new Error(
+                `normwinds: failed to resolve CSS import "${spec}" from ${sourcePath}: ${error.message}`,
+            );
+        }
         if (visited.has(importedAbs)) {
             // Already inlined upstream — silently skip to avoid cycles and
             // duplicate @theme blocks.
@@ -187,14 +246,14 @@ async function inlineLocalCssImports(sourceCss, sourcePath, visited) {
 
         let importedSource;
         try {
-            importedSource = await fs.readFile(importedAbs, "utf8");
+            importedSource = await readThemeCssSource(importedAbs, budget);
         } catch (error) {
             throw new Error(
                 `normwinds: failed to read CSS import "${spec}" from ${sourcePath}: ${error.message}`,
             );
         }
 
-        const inlined = await inlineLocalCssImports(importedSource, importedAbs, visited);
+        const inlined = await inlineLocalCssImports(importedSource, importedAbs, visited, budget);
         parts.push(`/* normwinds inlined: ${importedAbs} */\n${inlined}\n`);
     }
 
@@ -203,10 +262,14 @@ async function inlineLocalCssImports(sourceCss, sourcePath, visited) {
 }
 
 async function resolveThemeCssEntry(themeCssPath) {
-    const absPath = path.resolve(process.cwd(), themeCssPath);
-    const entrySource = await fs.readFile(absPath, "utf8");
+    const candidate = path.resolve(process.cwd(), themeCssPath);
+    const absPath = ACTION_WORKSPACE_ROOT
+        ? await resolveActionSafePath(candidate, "theme CSS entry")
+        : candidate;
+    const budget = { files: 0, bytes: 0 };
+    const entrySource = await readThemeCssSource(absPath, budget);
     const visited = new Set([absPath]);
-    const resolvedCss = await inlineLocalCssImports(entrySource, absPath, visited);
+    const resolvedCss = await inlineLocalCssImports(entrySource, absPath, visited, budget);
     return { absPath, resolvedCss, importedFiles: [...visited] };
 }
 
@@ -219,8 +282,8 @@ async function loadAugmentedDesignSystem(themeCssPath) {
     let promise = augmentedDesignSystemPromises.get(absPath);
     if (!promise) {
         promise = (async () => {
-            const { tailwind, tailwindRequire } = loadTailwind();
-            const tailwindIndexCssPath = tailwindRequire.resolve("tailwindcss/index.css");
+            const { tailwind, tailwindRequire, tailwindIndexCssPath: configuredCssPath } = loadTailwind();
+            const tailwindIndexCssPath = configuredCssPath || tailwindRequire.resolve("tailwindcss/index.css");
             const baseCss = await fs.readFile(tailwindIndexCssPath, "utf8");
             const { resolvedCss, importedFiles } = await resolveThemeCssEntry(themeCssPath);
 
@@ -274,6 +337,9 @@ function isSafeCacheEntry(key, value) {
 }
 
 async function loadDiskCache() {
+    if (process.env.NORMWIND_DISABLE_DISK_CACHE === "1") {
+        return false;
+    }
     try {
         const stats = await fs.stat(CACHE_FILE);
         if (stats.size > MAX_CACHE_FILE_BYTES) {
@@ -318,6 +384,9 @@ async function loadDiskCache() {
 }
 
 async function saveDiskCache() {
+    if (process.env.NORMWIND_DISABLE_DISK_CACHE === "1") {
+        return;
+    }
     if (!diskCacheDirty) {
         return;
     }
@@ -357,7 +426,12 @@ async function loadCanonicalSnapshot() {
         return false;
     }
 
-    const paths = [...new Set([CANONICAL_OUTPUT_JSON, BUNDLED_CANONICAL_JSON])];
+    // GitHub Action scans treat the checkout as hostile input. A repository
+    // may carry its own generated snapshot for CLI maintenance commands, but
+    // it must never override the Action's signed/tagged bundled reference.
+    const paths = ACTION_WORKSPACE_ROOT
+        ? [BUNDLED_CANONICAL_JSON]
+        : [...new Set([CANONICAL_OUTPUT_JSON, BUNDLED_CANONICAL_JSON])];
     const { tailwindPkg } = loadTailwind();
 
     for (const snapshotPath of paths) {
@@ -2548,11 +2622,8 @@ const RENDER_FUNCTION_NAMES = new Set([
     "_jsxs",
     "_jsxDEV",
 ]);
-let babelParserModule = null;
-
 function getBabelParser() {
-    babelParserModule ??= bundledRequire("@babel/parser");
-    return babelParserModule;
+    return bundledBabelParser;
 }
 
 function unwrapExpression(node) {
@@ -3180,6 +3251,22 @@ function hasGlobSyntax(value) {
     return /[*?[\]{}]/.test(value);
 }
 
+function validateActionPattern(pattern) {
+    if (!ACTION_WORKSPACE_ROOT) {
+        return;
+    }
+    const normalized = pattern.replace(/\\/g, "/");
+    const segments = normalized.split("/");
+    if (
+        pattern.includes("\0")
+        || path.isAbsolute(pattern)
+        || path.win32.isAbsolute(pattern)
+        || segments.includes("..")
+    ) {
+        throw new Error(`normwinds: Action patterns must stay inside the working directory: ${pattern}`);
+    }
+}
+
 function hasAllowedExtension(filePath) {
     return /\.(?:vue|js|mjs|ts|jsx|tsx)$/i.test(filePath);
 }
@@ -3207,6 +3294,11 @@ function isIgnoredRelativePath(relativePath) {
 }
 
 async function listFilesWithRipgrep(patterns) {
+    if (process.env.NORMWIND_DISABLE_RIPGREP === "1") {
+        const error = new Error("ripgrep is disabled in GitHub Action mode");
+        error.code = "ENOENT";
+        throw error;
+    }
     const args = ["--files", "--hidden"];
     for (const glob of RG_IGNORE_GLOBS) {
         args.push("-g", glob);
@@ -3291,6 +3383,9 @@ function globPatternToRegExp(pattern) {
 // entry.isDirectory() check follows the link. Each directory is realpath'd
 // and deduped before recursing so a loop is walked at most once.
 async function walkDirectory(directoryPath, results, visitedRealPaths = new Set()) {
+    if (ACTION_WORKSPACE_ROOT) {
+        await resolveActionSafePath(directoryPath, "scan directory");
+    }
     let entries;
     try {
         entries = await fs.readdir(directoryPath, { withFileTypes: true });
@@ -3310,6 +3405,9 @@ async function walkDirectory(directoryPath, results, visitedRealPaths = new Set(
             if (!targetStats || !targetStats.isDirectory()) {
                 continue;
             }
+            if (ACTION_WORKSPACE_ROOT) {
+                throw new Error(`normwinds: Action mode refuses directory symlinks: ${relativePath}`);
+            }
         } else if (!entry.isDirectory()) {
             if (entry.isFile() && hasAllowedExtension(relativePath)) {
                 results.push(path.resolve(fullPath));
@@ -3318,10 +3416,15 @@ async function walkDirectory(directoryPath, results, visitedRealPaths = new Set(
         }
 
         const realPath = await fs.realpath(fullPath).catch(() => null);
-        if (!realPath || visitedRealPaths.has(realPath)) {
+        if (!realPath) {
             continue;
         }
-        visitedRealPaths.add(realPath);
+        if (!ACTION_WORKSPACE_ROOT) {
+            if (visitedRealPaths.has(realPath)) {
+                continue;
+            }
+            visitedRealPaths.add(realPath);
+        }
         await walkDirectory(fullPath, results, visitedRealPaths);
     }
 }
@@ -3334,6 +3437,7 @@ async function listTargetFiles(patterns) {
     const targetPatterns = patterns.length > 0 ? patterns : DEFAULT_PATTERNS;
 
     for (const pattern of targetPatterns) {
+        validateActionPattern(pattern);
         if (hasGlobSyntax(pattern)) {
             globPatterns.push(pattern);
             continue;
@@ -3341,22 +3445,33 @@ async function listTargetFiles(patterns) {
 
         const resolved = path.resolve(process.cwd(), pattern);
         let stats = null;
+        let targetPath = resolved;
+        let linkStats;
         try {
-            stats = await fs.stat(resolved);
+            linkStats = await fs.lstat(resolved);
         } catch {
             globPatterns.push(pattern);
             continue;
         }
+        if (ACTION_WORKSPACE_ROOT && linkStats.isSymbolicLink()) {
+            targetPath = await resolveActionSafePath(resolved, `target "${pattern}"`);
+            stats = await fs.stat(targetPath);
+            if (stats.isDirectory()) {
+                throw new Error(`normwinds: Action mode refuses directory symlink target: ${pattern}`);
+            }
+        } else {
+            stats = await fs.stat(resolved);
+        }
 
         if (stats.isDirectory()) {
-            directoryTargets.push(resolved);
+            directoryTargets.push(targetPath);
             continue;
         }
 
         if (stats.isFile()) {
-            const relativePath = normalizeRelativePath(resolved);
+            const relativePath = normalizeRelativePath(targetPath);
             if (!isIgnoredRelativePath(relativePath) && hasAllowedExtension(relativePath)) {
-                explicitFiles.add(path.resolve(resolved));
+                explicitFiles.add(path.resolve(targetPath));
             }
         }
     }
@@ -3414,7 +3529,26 @@ async function listTargetFiles(patterns) {
         }
     }
 
-    return [...discoveredFiles].sort((a, b) => a.localeCompare(b));
+    const sortedFiles = [...discoveredFiles].sort((a, b) => a.localeCompare(b));
+    if (!ACTION_WORKSPACE_ROOT) {
+        return sortedFiles;
+    }
+    if (sortedFiles.length > ACTION_MAX_FILES) {
+        throw new Error(`normwinds: Action scan exceeds the ${ACTION_MAX_FILES}-file limit`);
+    }
+    const validated = await runWithConcurrency(sortedFiles, FILE_SCAN_CONCURRENCY, async (filePath) => {
+        const realPath = await resolveActionSafePath(filePath, "scan target");
+        const stats = await fs.stat(realPath);
+        if (!stats.isFile()) {
+            throw new Error(`normwinds: Action scan target is not a regular file: ${realPath}`);
+        }
+        return { filePath: realPath, size: stats.size };
+    });
+    const totalBytes = validated.reduce((sum, entry) => sum + entry.size, 0);
+    if (totalBytes > ACTION_MAX_TOTAL_SOURCE_BYTES) {
+        throw new Error(`normwinds: Action scan exceeds the ${ACTION_MAX_TOTAL_SOURCE_BYTES}-byte source limit`);
+    }
+    return [...new Set(validated.map((entry) => entry.filePath))].sort((a, b) => a.localeCompare(b));
 }
 
 async function runWithConcurrency(items, concurrency, worker) {

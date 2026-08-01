@@ -24,10 +24,13 @@
     "LICENSE"
   ],
   "scripts": {
+    "build:action": "node scripts/build-action.mjs",
+    "build:action:check": "node scripts/build-action.mjs --check",
     "canonical:extract": "node bin/normwind.mjs --extract-canonical --write-canonical-files",
     "canonical:check": "node bin/normwind.mjs --check-canonical",
-    "test": "node scripts/test-prepush.mjs",
-    "prepush": "node scripts/test-prepush.mjs",
+    "test": "node scripts/test-prepush.mjs && node scripts/test-action.mjs",
+    "prepush": "npm test",
+    "test:action": "node scripts/test-action.mjs",
     "test:regression": "node scripts/test-regression.mjs",
     "test:regression:update": "node scripts/test-regression.mjs --update",
     "test:compare": "node scripts/test-compare.mjs"
@@ -58,5 +61,9 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "devDependencies": {
+    "@actions/core": "3.0.1",
+    "@vercel/ncc": "0.44.1"
   }
 }

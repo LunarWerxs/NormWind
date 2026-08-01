@@ -10,7 +10,7 @@ Example:
     python scripts/release.py 3.1.0 --message "feat: add new canonical rules"
 
 What it does:
-    0. Pre-flight (no mutation): runs scripts/test-prepush.mjs and validates
+    0. Pre-flight (no mutation): runs the complete npm test gate and validates
        git state (on main, clean tree, not behind origin/main) and GitHub
        credentials.
     1. Bumps the version in package.json and syncs package-lock.json, then
@@ -243,12 +243,15 @@ def assert_github_credentials(github_pat: str) -> None:
 
 def run_test_gate() -> None:
     step("0a/4  Run pre-push test suite")
-    test_script = ROOT / "scripts" / "test-prepush.mjs"
-    print(f"  $ node {test_script}")
-    returncode = run_streamed(["node", str(test_script)], cwd=ROOT)
+    print("  $ npm test")
+    if os.name == "nt":
+        command = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", "npm", "test"]
+    else:
+        command = ["npm", "test"]
+    returncode = run_streamed(command, cwd=ROOT)
     if returncode != 0:
         sys.exit(
-            "Test gate failed (scripts/test-prepush.mjs exited "
+            "Test gate failed (npm test exited "
             f"{returncode}). See output above for which check failed. "
             "Fix the failing check and re-run release.py; nothing has "
             "been modified."

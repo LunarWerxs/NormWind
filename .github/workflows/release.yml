@@ -6,7 +6,9 @@ name: Release
 # build attestation linking the package to this repo, commit, and workflow.
 on:
   push:
-    tags: ["v*"]
+    # Version releases publish npm. Moving Action aliases such as `v3` do not,
+    # so they can follow the latest compatible Action without republishing npm.
+    tags: ["v[0-9]*.[0-9]*.[0-9]*"]
 
 permissions:
   contents: read

@@ -1,0 +1,51 @@
+name: NormWind Tailwind Audit
+description: Audit Tailwind class shorthand and canonicalization with inline annotations and a CI job summary.
+author: LunarWerx Studios
+
+branding:
+  icon: wind
+  color: blue
+
+inputs:
+  working-directory:
+    description: Directory to scan, relative to the checked-out repository root.
+    required: false
+    default: "."
+  patterns:
+    description: Optional newline-delimited file paths, directories, or globs. Empty scans all supported source files.
+    required: false
+    default: ""
+  theme-css:
+    description: Optional Tailwind CSS entry file used to resolve project theme variables.
+    required: false
+    default: ""
+  suggest-named-theme-vars:
+    description: Suggest named theme utilities; requires theme-css.
+    required: false
+    default: "false"
+  fail-on-findings:
+    description: Fail the workflow when normalization findings exist.
+    required: false
+    default: "true"
+  max-annotations:
+    description: Maximum inline annotations to emit, from 0 to 50. All findings remain in the job summary and JSON report.
+    required: false
+    default: "10"
+
+outputs:
+  version:
+    description: NormWind version used by the Action.
+  finding-count:
+    description: Number of normalization findings.
+  linted-files:
+    description: Number of files successfully scanned.
+  result:
+    description: "Audit result: clean, findings, or error."
+  exit-code:
+    description: "NormWind exit code: 0 clean, 1 findings, or 2 runtime/configuration error."
+  report-path:
+    description: Absolute path to the machine-readable JSON report on the runner.
+
+runs:
+  using: node24
+  main: dist/index.mjs

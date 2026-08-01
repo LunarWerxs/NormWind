@@ -14,7 +14,7 @@
 [![license MIT](https://img.shields.io/badge/license-MIT-05b0dc?style=flat-square&labelColor=0a0e17)](https://opensource.org/licenses/MIT)
 
 <strong>Normalize Tailwinds.</strong><br/>
-A tiny, zero-config CLI that finds bloated Tailwind utility classes and rewrites them into their short, canonical form.
+A zero-config CLI and GitHub Action that finds bloated Tailwind utility classes and rewrites them into their short, canonical form.
 
 </div>
 
@@ -333,7 +333,58 @@ npm run canonical:check     # verify (deterministic, CI-safe)
 
 ## 🤖 In CI
 
-Fail a pull request when shorthand or canonical findings exist:
+### GitHub Action
+
+Add inline annotations and fail a pull request when shorthand or canonical findings exist:
+
+```yaml
+name: NormWind
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tailwind-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: LunarWerxs/NormWind@v3
+```
+
+The Action is bundled, cross-platform, and read-only. It needs no API token, performs no runtime package installation, emits inline annotations plus a job summary, and writes a machine-readable JSON report to the runner. The `report-path` output remains available to later steps in the same job, where you can inspect it or pass it to your artifact uploader.
+
+For PR safety, Action mode treats the checkout strictly as data: it does not execute repository dependencies or tools, does not trust a repository-provided NormWind snapshot, and always uses the Tailwind engine bundled with that Action release. The standalone CLI retains project-version-aware Tailwind resolution for trusted local use.
+
+Pin `@v3.7.0` or the release commit SHA instead of `@v3` when you require an immutable dependency.
+
+<details>
+<summary><strong>Action inputs and outputs</strong></summary>
+
+<br/>
+
+Inputs:
+
+| Input | Default | Purpose |
+| ----- | ------- | ------- |
+| `working-directory` | `.` | Directory to scan, relative to the repository root. |
+| `patterns` | all supported files | Newline-delimited file paths, directories, or globs. |
+| `theme-css` | — | Tailwind CSS entry file used to resolve project theme variables. |
+| `suggest-named-theme-vars` | `false` | Suggest named theme utilities; requires `theme-css`. |
+| `fail-on-findings` | `true` | Fail CI when normalization findings exist. |
+| `max-annotations` | `10` | Inline annotation cap from `0` to `50`; every finding remains in the summary/report. |
+
+Outputs: `version`, `finding-count`, `linted-files`, `result`, `exit-code`, and `report-path`.
+
+</details>
+
+### Any CI provider
+
+Use the CLI directly anywhere Node.js is available:
 
 ```bash
 npx @lunawerx/normwind --json
@@ -389,6 +440,18 @@ NormWind deliberately uses `eslint-plugin-tailwindcss`'s **static group data** i
 </details>
 
 ## 📜 Changelog
+
+<details>
+<summary><strong>v3.7.0</strong> — 2026-08-01 · GitHub Marketplace Action</summary>
+
+<br/>
+
+- **Native GitHub review feedback** — the new `NormWind Tailwind Audit` Action emits file-and-line annotations, a complete job summary, stable outputs, and a machine-readable JSON report. Findings can fail the job or run in advisory mode; incomplete scans always fail closed.
+- **Self-contained and least privilege** — the JavaScript Action bundles NormWind, Tailwind, Babel, and its reporting runtime; it installs nothing on the runner, requires no secret or write permission, strips inherited secrets from its scanner process, never executes checkout-provided dependencies/tools, and confines source/theme reads to the checked-out workspace.
+- **Reproducible Action releases** — deterministic bundle generation, committed third-party license inventories, bundle-drift tests, and a pre-install local-Action smoke step now gate CI and releases. Moving Action tags no longer trigger duplicate npm publications.
+- **Dependency hardening** — the transitive PostCSS version is refreshed past its source-map path-traversal advisory, leaving `npm audit` clean.
+
+</details>
 
 <details>
 <summary><strong>v3.6.2</strong> — 2026-07-24 · project-version-aware Tailwind safety</summary>
