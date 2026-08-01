@@ -5,6 +5,7 @@
 * text=auto
 docs/reference/canonical-replacements.json text eol=lf
 docs/reference/canonical-replacements.md text eol=lf
+dist/** text eol=lf
 
 # The regression suite (scripts/test-regression.mjs) does a plain string
 # comparison of fixture input/output against the committed expected.* files.

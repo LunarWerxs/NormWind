@@ -92,6 +92,11 @@ async function compareDirectories(expected, actual) {
     }
 }
 
+async function normalizeTextFile(filePath) {
+    const text = await fs.readFile(filePath, "utf8");
+    await fs.writeFile(filePath, text.replace(/\r\n?/g, "\n"), "utf8");
+}
+
 async function main() {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "normwind-action-build-"));
     const actionOutput = path.join(tempRoot, "action");
@@ -120,6 +125,11 @@ async function main() {
                 path.join(generatedDist, "CLI_THIRD_PARTY_LICENSES.txt"),
             ),
         ]);
+        await Promise.all(
+            (await listFiles(generatedDist)).map((relative) =>
+                normalizeTextFile(path.join(generatedDist, relative)),
+            ),
+        );
 
         if (CHECK_ONLY) {
             await compareDirectories(generatedDist, DIST_DIR);
