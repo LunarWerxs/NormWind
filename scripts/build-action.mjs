@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -72,7 +73,21 @@ async function compareDirectories(expected, actual) {
             fs.readFile(path.join(actual, relative)),
         ]);
         if (!left.equals(right)) {
-            throw new Error(`Committed dist/${relative} is stale. Run npm run build:action.`);
+            let firstDifference = 0;
+            const sharedLength = Math.min(left.length, right.length);
+            while (firstDifference < sharedLength && left[firstDifference] === right[firstDifference]) {
+                firstDifference += 1;
+            }
+            const contextStart = Math.max(0, firstDifference - 80);
+            const contextEnd = firstDifference + 160;
+            const digest = (value) => createHash("sha256").update(value).digest("hex");
+            const context = (value) => JSON.stringify(value.subarray(contextStart, contextEnd).toString("utf8"));
+            throw new Error(
+                `Committed dist/${relative} is stale at byte ${firstDifference}. `
+                + `generated=${digest(left)} committed=${digest(right)}; `
+                + `generated-context=${context(left)} committed-context=${context(right)}. `
+                + "Run npm run build:action.",
+            );
         }
     }
 }
