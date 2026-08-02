@@ -1,0 +1,735 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NormWind — Tailwind shorthand audit and safe autofix</title>
+<meta name="description" content="A zero-config CLI and GitHub Action that finds bloated Tailwind utility classes and rewrites them into their short, canonical form. Every rewrite comes from Tailwind's own engine, never a stylistic guess.">
+<link rel="icon" href="assets/icon-256.png" type="image/png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="NormWind">
+<link rel="canonical" href="https://normwind.lunarwerx.com/">
+<meta property="og:url" content="https://normwind.lunarwerx.com/">
+<meta property="og:title" content="NormWind — Normalize Tailwinds">
+<meta property="og:description" content="Audit and safely autofix bloated Tailwind utility classes. Zero config, Tailwind v4, CLI and GitHub Action. MIT-licensed.">
+<meta property="og:image" content="https://normwind.lunarwerx.com/assets/og-image.png">
+<meta property="og:image:alt" content="NormWind — Normalize Tailwinds">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="NormWind — Normalize Tailwinds">
+<meta name="twitter:description" content="Audit and safely autofix bloated Tailwind utility classes. Zero config, Tailwind v4, CLI and GitHub Action. MIT-licensed.">
+<meta name="twitter:image" content="https://normwind.lunarwerx.com/assets/og-image.png">
+<style>
+
+  /* ---------- Reset & base ---------- */
+  *, *::before, *::after { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+  }
+  body { margin: 0; }
+  img { max-width: 100%; display: block; }
+  a { color: inherit; }
+
+  :root{
+    /* ---- color tokens ---- */
+    --bg:        #0A0E17;
+    --surface:   #121826;
+    --surface-2: #18202F;
+    --border:    #263043;
+    --ink:       #F2F6FB;
+    --muted:     #93A2BC;
+    --faint:     #64748B;
+    --cyan:      #05B0DC;
+    --cyan-dim:  #0588BD;
+    --deep:      #04609F;
+    --amber:     #E0AC4C;
+
+    /* ---- type tokens ---- */
+    --font-display: -apple-system, "Segoe UI Semibold", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-body: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, "Cascadia Code", "Cascadia Mono", "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+
+    --container: 1120px;
+  }
+
+  html, body { background: var(--bg); color: var(--ink); }
+
+  body{
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+    background-image:
+      radial-gradient(ellipse 900px 500px at 10% -10%, rgba(5,176,220,0.15), transparent 60%),
+      radial-gradient(ellipse 700px 500px at 100% 8%, rgba(4,96,159,0.16), transparent 55%),
+      linear-gradient(var(--bg), var(--bg));
+    background-attachment: fixed;
+  }
+
+  h1, h2, h3, h4 { font-family: var(--font-display); font-weight: 800; margin: 0; text-wrap: balance; letter-spacing: -0.01em; }
+  p { margin: 0; }
+
+  .container { width: 100%; max-width: var(--container); margin-inline: auto; padding-inline: 24px; }
+  section { position: relative; }
+  ::selection { background: var(--cyan-dim); color: #fff; }
+  :focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; border-radius: 4px; }
+
+  /* ---------- Eyebrow ---------- */
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--cyan);
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 8px; height: 8px;
+    background: var(--cyan);
+    border-radius: 1px;
+    box-shadow: 0 0 8px rgba(5,176,220,0.8);
+    flex: none;
+  }
+
+  code.cls {
+    font-family: var(--font-mono);
+    font-size: 0.88em;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 2px 7px;
+    white-space: nowrap;
+  }
+
+  /* ---------- Header / nav ---------- */
+  .site-header {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: rgba(10,14,23,0.82);
+    backdrop-filter: saturate(140%) blur(10px);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  .nav { display: flex; align-items: center; justify-content: space-between; padding-block: 14px; gap: 20px; }
+  .brand {
+    display: flex; align-items: center; gap: 10px;
+    font-family: var(--font-display); font-weight: 800;
+    font-size: 1.05rem; letter-spacing: -0.01em; text-decoration: none;
+  }
+  .brand img { width: 30px; height: 30px; object-fit: contain; }
+  .brand-name { font-family: var(--font-mono); font-weight: 600; letter-spacing: -0.02em; }
+  .brand-name .dim { color: var(--muted); font-weight: 500; }
+
+  .nav-links { display: flex; align-items: center; gap: 28px; list-style: none; margin: 0; padding: 0; }
+  .nav-links a { text-decoration: none; color: var(--muted); font-size: 0.92rem; transition: color .15s ease; }
+  .nav-links a:hover { color: var(--ink); }
+
+  .nav-cta {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--cyan-dim); color: #04121a;
+    padding: 9px 16px; border-radius: 8px;
+    font-size: 0.88rem; font-weight: 700; text-decoration: none;
+    border: 1px solid rgba(255,255,255,0.12);
+    transition: background .15s ease, transform .15s ease;
+    white-space: nowrap;
+  }
+  .nav-cta:hover { background: var(--cyan); transform: translateY(-1px); }
+
+  /* ---------- Buttons ---------- */
+  .btn {
+    display: inline-flex; align-items: center; gap: 10px;
+    font-weight: 700; text-decoration: none;
+    padding: 14px 24px; border-radius: 10px;
+    font-size: 1rem; line-height: 1;
+    transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
+    border: 1px solid transparent;
+  }
+  .btn svg { flex: none; }
+  .btn-primary { background: var(--cyan-dim); color: #04121a; box-shadow: 0 8px 24px -8px rgba(5,176,220,0.55); }
+  .btn-primary:hover { background: var(--cyan); transform: translateY(-2px); box-shadow: 0 12px 28px -8px rgba(5,176,220,0.65); }
+  .btn-ghost { background: rgba(255,255,255,0.03); color: var(--ink); border-color: var(--border); }
+  .btn-ghost:hover { background: rgba(255,255,255,0.07); border-color: #35435c; transform: translateY(-2px); }
+
+  /* ---------- Hero ---------- */
+  .hero { padding-top: 88px; padding-bottom: 72px; }
+  .hero-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,480px); gap: 56px; align-items: center; }
+  .hero h1 { font-size: clamp(2.1rem, 4.6vw, 3.3rem); line-height: 1.08; margin-bottom: 22px; }
+  .hero h1 .accent { color: var(--cyan); }
+  .hero-sub { color: var(--muted); font-size: 1.14rem; max-width: 54ch; margin-bottom: 30px; }
+  .hero-actions { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 30px; }
+  .hero-meta { display: flex; flex-wrap: wrap; gap: 10px 22px; color: var(--faint); font-size: 0.86rem; font-family: var(--font-mono); }
+  .hero-meta span { display: inline-flex; align-items: center; gap: 7px; }
+  .hero-meta svg { flex: none; opacity: .8; }
+
+  /* ---------- Terminal / code windows ---------- */
+  .term, .code-window {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 30px 60px -20px rgba(0,0,0,0.65);
+  }
+  .term-bar, .code-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 11px 14px;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+  }
+  .term-dot { width: 11px; height: 11px; border-radius: 50%; }
+  .term-dot.r { background: #E5645B; }
+  .term-dot.y { background: #E0AC4C; }
+  .term-dot.g { background: #4CB874; }
+  .term-title, .code-filename {
+    margin-inline: auto;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--faint);
+    transform: translateX(-18px);
+  }
+  .term-body { padding: 20px 20px 24px; font-family: var(--font-mono); font-size: 0.86rem; line-height: 1.75; }
+  .term-line { display: flex; gap: 10px; }
+  .term-prompt { color: var(--cyan); flex: none; }
+  .term-cmd { color: var(--ink); }
+  .term-dim { color: var(--faint); }
+  .term-file { color: var(--ink); margin-top: 14px; }
+  .term-hit { color: var(--muted); padding-left: 14px; }
+  .term-bad { color: var(--amber); }
+  .term-good { color: #56D4A0; }
+  .term-sum { color: var(--muted); margin-top: 14px; border-left: 2px solid var(--cyan-dim); padding-left: 12px; }
+  .caret { display: inline-block; width: 8px; height: 1.05em; background: var(--cyan); vertical-align: text-bottom; animation: blink 1.1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .caret { animation: none; } }
+
+  .copy-btn {
+    font-family: var(--font-mono); font-size: 0.76rem;
+    color: var(--muted);
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 10px;
+    display: inline-flex; align-items: center; gap: 6px;
+    cursor: pointer;
+    transition: color .15s ease, border-color .15s ease, background .15s ease;
+  }
+  .copy-btn:hover { color: var(--ink); border-color: #35435c; background: rgba(255,255,255,0.08); }
+  .copy-btn svg { flex: none; }
+  .code-body { margin: 0; padding: 22px 22px 26px; overflow-x: auto; font-family: var(--font-mono); font-size: 0.86rem; line-height: 1.75; }
+  .code-body code { white-space: pre; }
+  .tok-punc { color: var(--faint); }
+  .tok-key { color: var(--cyan); }
+  .tok-str { color: var(--amber); }
+  .tok-com { color: var(--faint); font-style: italic; }
+
+  /* ---------- Section shells ---------- */
+  .section { padding-block: 88px; }
+  .section-head { max-width: 660px; margin-bottom: 48px; }
+  .section-head h2 { font-size: clamp(1.6rem, 3vw, 2.2rem); margin-bottom: 14px; }
+  .section-head p { color: var(--muted); font-size: 1.05rem; }
+  .divider { height: 1px; background: linear-gradient(90deg, transparent, var(--border) 20%, var(--border) 80%, transparent); border: none; margin: 0; }
+
+  /* ---------- Before / after ---------- */
+  .swap-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 14px; }
+  .swap {
+    display: flex; align-items: center; gap: 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 18px;
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+  }
+  .swap .before { color: var(--amber); flex: 1; }
+  .swap .arrow { color: var(--faint); flex: none; }
+  .swap .after { color: var(--cyan); font-weight: 600; flex: 1; text-align: right; }
+  .swap-note { margin-top: 26px; color: var(--muted); font-size: 0.95rem; }
+
+  /* ---------- Cards ---------- */
+  .feature-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 20px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 26px 24px;
+    transition: border-color .15s ease, transform .15s ease, background .15s ease;
+  }
+  .card:hover { border-color: #35435c; transform: translateY(-3px); background: var(--surface-2); }
+  .card-icon {
+    width: 42px; height: 42px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 16px;
+    background: rgba(5,176,220,0.14);
+    color: var(--cyan);
+    font-family: var(--font-mono);
+    font-weight: 700;
+  }
+  .card.deep .card-icon { background: rgba(4,96,159,0.22); color: #6FB6E8; }
+  .card h3 { font-size: 1.06rem; margin-bottom: 9px; }
+  .card h3 code { font-family: var(--font-mono); font-size: 0.92em; color: var(--cyan); }
+  .card p { color: var(--muted); font-size: 0.95rem; }
+  .card.wide { grid-column: span 2; }
+
+  /* ---------- Split section ---------- */
+  .split .container { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 56px; align-items: center; }
+  .split-copy h2 { font-size: clamp(1.6rem, 3vw, 2.1rem); margin-bottom: 16px; }
+  .split-copy p { color: var(--muted); margin-bottom: 16px; }
+  .split-copy ul { margin: 0 0 8px; padding-left: 0; list-style: none; display: grid; gap: 12px; }
+  .split-copy li { display: flex; gap: 10px; color: var(--muted); font-size: 0.95rem; align-items: flex-start; }
+  .split-copy li svg { flex: none; margin-top: 4px; color: var(--cyan); }
+  .split-copy li b { color: var(--ink); font-weight: 600; }
+
+  /* ---------- Callout ---------- */
+  .note {
+    margin-top: 26px;
+    display: flex; gap: 14px; align-items: flex-start;
+    background: rgba(5,176,220,0.07);
+    border: 1px solid rgba(5,176,220,0.24);
+    border-radius: 12px;
+    padding: 18px 20px;
+  }
+  .note svg { flex: none; color: var(--cyan); margin-top: 2px; }
+  .note p { color: var(--muted); font-size: 0.94rem; }
+  .note b { color: var(--ink); }
+
+  /* ---------- Exit codes ---------- */
+  .exit-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px,1fr)); gap: 14px; margin-top: 30px; }
+  .exit-chip { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; }
+  .exit-chip .n { font-family: var(--font-mono); font-size: 1.5rem; font-weight: 700; color: var(--cyan); line-height: 1; }
+  .exit-chip .d { display: block; margin-top: 8px; color: var(--muted); font-size: 0.9rem; }
+
+  /* ---------- Final CTA ---------- */
+  .cta-final { text-align: center; padding-block: 96px; }
+  .cta-final h2 { font-size: clamp(1.8rem, 4vw, 2.6rem); margin-bottom: 18px; }
+  .cta-final p { color: var(--muted); font-size: 1.08rem; max-width: 52ch; margin: 0 auto 34px; }
+  .cta-final .hero-actions { justify-content: center; }
+
+  /* ---------- Footer ---------- */
+  .site-footer { border-top: 1px solid var(--border); padding-block: 44px; }
+  .footer-grid { display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
+  .footer-logo img { height: 22px; width: auto; }
+  .footer-links { display: flex; gap: 26px; flex-wrap: wrap; list-style: none; margin: 0; padding: 0; }
+  .footer-links a { color: var(--muted); text-decoration: none; font-size: 0.9rem; display: inline-flex; align-items: center; gap: 8px; }
+  .footer-links a:hover { color: var(--ink); }
+  .footer-links img { width: 17px; height: 17px; filter: invert(1) brightness(1.6); }
+  .footer-meta { color: var(--faint); font-size: 0.82rem; font-family: var(--font-mono); margin-top: 22px; text-align: center; }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width: 980px){
+    .hero-grid { grid-template-columns: 1fr; }
+    .hero { padding-top: 40px; }
+    .feature-grid { grid-template-columns: repeat(2, 1fr); }
+    .split .container { grid-template-columns: 1fr; }
+    .split-copy { order: 1; }
+    .split .code-window { order: 2; }
+    .swap-grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 680px){
+    .nav-links { display: none; }
+    .feature-grid { grid-template-columns: 1fr; }
+    .card.wide { grid-column: span 1; }
+    .section { padding-block: 60px; }
+    .hero { padding-bottom: 50px; }
+    .footer-grid { flex-direction: column; align-items: flex-start; }
+    .term-body, .code-body { font-size: 0.78rem; }
+  }
+</style>
+<style>
+/* Back to the parent studio: a bare arrow at the top left of the page.
+   Deliberately not in the header and deliberately unstyled beyond a hover
+   fade. Colour is inherited so it picks up whatever each site already uses.
+   `fixed`, not `absolute`: every one of these sites has a position:sticky nav
+   with a background, and an absolute arrow at the top left would sit under it. */
+/* A full-header-height band with the icon centred in it, so the arrow sits on
+   the header's centreline by construction. --lw-bar is that header's measured
+   height; the sites run 59 to 72px, so no shared constant fits. */
+:root{--lw-bar:72px}
+a.lw-parent{position:fixed;top:0;left:.55rem;z-index:1000;display:inline-flex;align-items:center;justify-content:center;width:1.9rem;height:var(--lw-bar,64px);color:inherit;opacity:.45;text-decoration:none;-webkit-tap-highlight-color:transparent;transition:opacity .15s ease}
+a.lw-parent:hover,a.lw-parent:focus-visible{opacity:1}
+a.lw-parent svg{display:block}
+/* The arrow is out of the flow now, so the header's first item would slide
+   under it wherever the nav column starts at the viewport edge. */
+.lw-home-group{padding-left:2.75rem}
+@media (prefers-reduced-motion:reduce){a.lw-parent{transition:none}}
+/* The tooltip. Replaces the native `title`, which waits ~1s, cannot be styled,
+   and draws outside the page. Below the arrow, not beside it: the arrow is at
+   the left margin and a panel opening rightward runs into the viewport edge. */
+a.lw-parent .lw-tip{position:absolute;top:calc(100% - .5rem);left:0;transform:translateY(-3px);display:flex;flex-direction:column;gap:.1rem;padding:.4rem .58rem;border-radius:.5rem;border:1px solid rgba(255,255,255,.14);background:rgba(9,11,17,.97);box-shadow:0 12px 30px -14px rgba(0,0,0,.9);color:#e9ecf3;font-family:inherit;line-height:1.3;text-align:left;white-space:nowrap;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .12s ease,transform .12s ease,visibility 0s linear .12s}
+a.lw-parent .lw-tip>span:first-child{font-size:.78rem;font-weight:600}
+a.lw-parent .lw-tip>span:last-child{font-size:.72rem;font-weight:400;opacity:.6}
+/* Caret, drawn off the panel so it cannot be clipped by the arrow's own box. */
+a.lw-parent .lw-tip::before{content:"";position:absolute;bottom:100%;left:.5rem;border:4px solid transparent;border-bottom-color:rgba(9,11,17,.97)}
+a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility:visible;transform:translateY(0);transition-delay:0s}
+/* A finger has no hover: the panel would appear on tap and then follow the
+   reader to the next page, which is worse than not having it. */
+@media (hover:none){a.lw-parent .lw-tip{display:none}}
+@media (prefers-reduced-motion:reduce){a.lw-parent .lw-tip{transition:opacity .12s ease,visibility 0s linear .12s;transform:none}a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{transform:none}}
+</style>
+    <!-- ARGUS Analytics Pixel (Connections, analytics.connections.icu).
+         The key is a PUBLIC ingest key and is meant to ship in client JS.
+         Honours DNT and Sec-GPC by itself, and is grant-by-default outside the
+         EU/EEA/UK/CH (the pixel is stamped per-visitor at the edge). localhost
+         is skipped so a local preview cannot inflate the numbers. -->
+    <script>
+        (function (w, d, k) {
+            function warn(msg, err) {
+                try {
+                    if (w.console && typeof w.console.warn === 'function') {
+                        if (err) { w.console.warn(msg, err); } else { w.console.warn(msg); }
+                    }
+                } catch (e0) { }
+            }
+            try {
+                var key = (typeof k === 'string') ? k.replace(/^\s+|\s+$/g, '') : '';
+                if (!key || key === 'ak_YOUR_SITE_KEY') {
+                    warn('[ARGUS] missing or placeholder pixel key; pixel not installed');
+                    return;
+                }
+                if (d.getElementById('argus-pixel')) { return; }
+                var host = w.location.hostname;
+                if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host.endsWith('.local')) { return; }
+                var P = w.ArgusPixel = w.ArgusPixel || {};
+                P.key = key;
+                var j = d.createElement('script');
+                j.async = true;
+                j.id = 'argus-pixel';
+                j.type = 'text/javascript';
+                // ?v= is the cache-bust lever: the pixel is served max-age=3600
+                // from ONE origin shared by every tracked site, so bump this when
+                // a pixel change has to reach existing readers now.
+                j.src = 'https://analytics.connections.icu/pixel.js?v=2';
+                j.onerror = function () { warn('[ARGUS] pixel.js failed to load (check CSP script-src / network / ad-blocker)'); };
+                var mount = d.head || d.getElementsByTagName('head')[0] || d.documentElement || d.body;
+                if (!mount) { warn('[ARGUS] no DOM mount point for pixel; skipping'); return; }
+                mount.appendChild(j);
+            } catch (e) {
+                warn('[ARGUS] pixel install failed', e);
+            }
+        })(window, document, 'ak_699988228a77ffbba051bf3629431ba08812');
+    </script>
+    <!-- End ARGUS Analytics Pixel -->
+</head>
+<body>
+<a class="lw-parent" href="https://lunarwerx.com/" aria-label="Back to LunarWerx Studios, the parent studio"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg><span class="lw-tip" aria-hidden="true"><span>LunarWerx Studios</span><span>Every app we build, in one place</span></span></a>
+
+<header class="site-header">
+  <nav class="nav container" aria-label="Primary">
+    <span class="lw-home-group"><a class="brand" href="#top">
+      <img src="assets/icon-256.png" alt="" width="30" height="30">
+      <span class="brand-name">normwind</span>
+    </a></span>
+    <ul class="nav-links">
+      <li><a href="#swaps">What it fixes</a></li>
+      <li><a href="#trust">Why trust it</a></li>
+      <li><a href="#modes">Fix modes</a></li>
+      <li><a href="#ci">CI</a></li>
+      <li><a href="https://github.com/LunarWerxs/NormWind">Source</a></li>
+    </ul>
+    <a class="nav-cta" href="https://www.npmjs.com/package/@lunawerx/normwind">Get it on npm</a>
+  </nav>
+</header>
+
+<main id="top">
+
+  <!-- ============ HERO ============ -->
+  <section class="hero container" aria-labelledby="hero-heading">
+    <div class="hero-grid">
+      <div>
+        <p class="eyebrow">@lunawerx/normwind · v3.7.0 · node 20+</p>
+        <h1 id="hero-heading">Your Tailwind classes are longer <span class="accent">than Tailwind needs them to be.</span></h1>
+        <p class="hero-sub">A zero-config CLI and GitHub Action that finds bloated utility strings and rewrites them into their short, canonical form. No rules file, no sort order, no opinions imposed on your repo.</p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="https://www.npmjs.com/package/@lunawerx/normwind">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v13m0 0-4.5-4.5M12 16l4.5-4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 19.5h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            Get it on npm
+          </a>
+          <a class="btn btn-ghost" href="https://github.com/LunarWerxs/NormWind">
+            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2.15c-3.2.7-3.88-1.36-3.88-1.36-.53-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.26.73-1.55-2.56-.29-5.25-1.28-5.25-5.7 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.64 1.59.24 2.76.12 3.05.74.81 1.18 1.84 1.18 3.1 0 4.43-2.7 5.4-5.27 5.69.42.36.78 1.07.78 2.16v3.2c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
+            View on GitHub
+          </a>
+        </div>
+        <div class="hero-meta">
+          <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 21s-7-4.6-9.5-9C1 8.5 2.5 5 6 5c2 0 3.5 1.2 4 2 .5-.8 2-2 4-2 3.5 0 5 3.5 3.5 7-2.5 4.4-9.5 9-9.5 9Z" stroke="currentColor" stroke-width="1.6"/></svg> Free &amp; MIT-licensed</span>
+          <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 7h16M4 12h16M4 17h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg> Zero config</span>
+          <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 3 4 6v6c0 5 3.4 8.4 8 9 4.6-.6 8-4 8-9V6l-8-3Z" stroke="currentColor" stroke-width="1.6"/><path d="m8.5 12 2.2 2.2 4.8-5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg> Tailwind v4</span>
+          <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 7.5A2.5 2.5 0 0 1 7.5 5h9A2.5 2.5 0 0 1 19 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-9A2.5 2.5 0 0 1 5 16.5v-9Z" stroke="currentColor" stroke-width="1.6"/></svg> Vue, JS, TS, JSX, TSX</span>
+        </div>
+      </div>
+
+      <div class="term" role="img" aria-label="Mock terminal running npx normwind, showing two findings in a Vue file and a summary line">
+        <div class="term-bar">
+          <span class="term-dot r"></span><span class="term-dot y"></span><span class="term-dot g"></span>
+          <span class="term-title">normwind — audit</span>
+        </div>
+        <div class="term-body">
+          <div class="term-line"><span class="term-prompt">$</span><span class="term-cmd">npx @lunawerx/normwind</span></div>
+          <div class="term-dim">scanning **/*.{vue,js,mjs,ts,jsx,tsx}</div>
+          <div class="term-file">src/components/Card.vue</div>
+          <div class="term-hit">12:18 <span class="term-bad">px-4 py-4</span> → <span class="term-good">p-4</span></div>
+          <div class="term-hit">31:24 <span class="term-bad">w-6 h-6</span> → <span class="term-good">size-6</span></div>
+          <div class="term-file">src/views/Home.vue</div>
+          <div class="term-hit">&nbsp;8:11 <span class="term-bad">rounded-[24px]</span> → <span class="term-good">rounded-3xl</span></div>
+          <div class="term-sum">3 findings in 2 files · exit 1<br>run with --fix to rewrite<span class="caret" aria-hidden="true"></span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- ============ SWAPS ============ -->
+  <section class="section" id="swaps" aria-labelledby="swaps-heading">
+    <div class="container">
+      <div class="section-head">
+        <p class="eyebrow">// at a glance</p>
+        <h2 id="swaps-heading">Two kinds of noise, collapsed.</h2>
+        <p>Verbose utility combinations, and arbitrary values that Tailwind already has a name for. Both are found by an audit and both can be rewritten for you.</p>
+      </div>
+
+      <div class="swap-grid">
+        <div class="swap"><span class="before">px-4 py-4</span><span class="arrow">→</span><span class="after">p-4</span></div>
+        <div class="swap"><span class="before">rounded-[24px]</span><span class="arrow">→</span><span class="after">rounded-3xl</span></div>
+        <div class="swap"><span class="before">pl-2 pr-2</span><span class="arrow">→</span><span class="after">px-2</span></div>
+        <div class="swap"><span class="before">w-[100%]</span><span class="arrow">→</span><span class="after">w-full</span></div>
+        <div class="swap"><span class="before">mt-3 mb-3</span><span class="arrow">→</span><span class="after">my-3</span></div>
+        <div class="swap"><span class="before">h-[1.5rem]</span><span class="arrow">→</span><span class="after">h-6</span></div>
+        <div class="swap"><span class="before">w-6 h-6</span><span class="arrow">→</span><span class="after">size-6</span></div>
+        <div class="swap"><span class="before">p-[1rem]</span><span class="arrow">→</span><span class="after">p-4</span></div>
+        <div class="swap"><span class="before">left-0 right-0</span><span class="arrow">→</span><span class="after">inset-x-0</span></div>
+        <div class="swap"><span class="before">m-[8px]</span><span class="arrow">→</span><span class="after">m-2</span></div>
+        <div class="swap"><span class="before">content-center justify-center</span><span class="arrow">→</span><span class="after">place-content-center</span></div>
+        <div class="swap"><span class="before">overflow-x-hidden overflow-y-hidden</span><span class="arrow">→</span><span class="after">overflow-hidden</span></div>
+      </div>
+
+      <p class="swap-note">Also <code class="cls">gap-x-4 gap-y-4</code>, <code class="cls">top-0 bottom-0</code>, <code class="cls">items-start justify-items-start</code>, <code class="cls">self-end justify-self-end</code>, and the rest of Tailwind's shorthand families.</p>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- ============ TRUST ============ -->
+  <section class="section split" id="trust" aria-labelledby="trust-heading">
+    <div class="container">
+      <div class="split-copy">
+        <p class="eyebrow">// why you can trust it</p>
+        <h2 id="trust-heading">NormWind doesn't invent mappings.</h2>
+        <p>Every "after" is something Tailwind itself considers equivalent to the "before". There is no heuristic and no house style in the middle.</p>
+        <ul>
+          <li>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="m5 12 5 5 9-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span><b>Shorthand groups</b> come from <code class="cls">eslint-plugin-tailwindcss</code>'s utility-group definitions.</span>
+          </li>
+          <li>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="m5 12 5 5 9-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span><b>Canonical values</b> come from Tailwind's own <code class="cls">designSystem.canonicalizeCandidates</code> engine.</span>
+          </li>
+          <li>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="m5 12 5 5 9-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span><b>Your Tailwind wins.</b> It resolves the Tailwind install in the scanned project first, so fixes match the version that will actually build it.</span>
+          </li>
+          <li>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="m5 12 5 5 9-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span><b>Nothing is written into your repo.</b> The bundled canonical snapshot makes the first run fast and deterministic, and stays inside the package.</span>
+          </li>
+        </ul>
+        <div class="note">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11Z" stroke="currentColor" stroke-width="1.6"/></svg>
+          <p><b>On Tailwind 4.0</b>, which predates the canonicalization API, NormWind still audits and fixes shorthand groups and deliberately leaves arbitrary values alone rather than applying newer semantics to an older engine.</p>
+        </div>
+      </div>
+
+      <div class="code-window">
+        <div class="code-bar">
+          <span class="term-dot r"></span><span class="term-dot y"></span><span class="term-dot g"></span>
+          <span class="code-filename">Card.vue — before / after</span>
+        </div>
+        <pre class="code-body"><code><span class="tok-com">&lt;!-- before --&gt;</span>
+&lt;<span class="tok-key">div</span> <span class="tok-key">class</span>=<span class="tok-str">"px-4 py-4 mt-3 mb-3
+     rounded-[24px] w-6 h-6"</span>&gt;
+
+<span class="tok-com">&lt;!-- after: normwind --fix --&gt;</span>
+&lt;<span class="tok-key">div</span> <span class="tok-key">class</span>=<span class="tok-str">"p-4 my-3
+     rounded-3xl size-6"</span>&gt;</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- ============ MODES ============ -->
+  <section class="section" id="modes" aria-labelledby="modes-heading">
+    <div class="container">
+      <div class="section-head">
+        <p class="eyebrow">// fix modes</p>
+        <h2 id="modes-heading">Audit it, preview it, or let it rewrite.</h2>
+        <p>Start read-only. Widen the blast radius only when you want to.</p>
+      </div>
+
+      <div class="feature-grid">
+        <div class="card">
+          <div class="card-icon">$</div>
+          <h3><code>normwind</code></h3>
+          <p>Audit the current project and report every finding with its file and line. Exits <code class="cls">1</code> when there is anything to clean up, so it works as a gate without any extra flags.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">✓</div>
+          <h3><code>--fix</code></h3>
+          <p>The safe default. Rewrites <code class="cls">.vue</code> files, then re-runs the audit so you see what is left. Per-file fault isolation means one unparseable file cannot take the run down with it.</p>
+        </div>
+        <div class="card deep">
+          <div class="card-icon">↔</div>
+          <h3><code>--fixall</code></h3>
+          <p>The whole codebase: Vue, JS, MJS, TS, JSX, and TSX. Same transforms, wider reach, for when you want the cleanup done in one pass.</p>
+        </div>
+        <div class="card deep">
+          <div class="card-icon">👁</div>
+          <h3><code>--dry-run</code></h3>
+          <p>Pair it with either fix mode to see exactly which files <em>would</em> be rewritten. Nothing touches disk.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">{ }</div>
+          <h3><code>--json</code></h3>
+          <p>Machine-readable findings for CI dashboards, custom reporters, or anything else that would rather not parse a terminal.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">◎</div>
+          <h3>Scope it</h3>
+          <p>Pass a folder or a glob: <code class="cls">normwind src</code>, or <code class="cls">normwind "apps/web/**/*.{tsx,ts}"</code>. With no arguments it scans the project and skips <code class="cls">node_modules</code>, <code class="cls">dist</code>, and the usual build scratch.</p>
+        </div>
+      </div>
+
+      <div class="exit-strip">
+        <div class="exit-chip"><span class="n">0</span><span class="d">Nothing to clean up.</span></div>
+        <div class="exit-chip"><span class="n">1</span><span class="d">Findings reported. This is the one CI should fail on.</span></div>
+        <div class="exit-chip"><span class="n">2</span><span class="d">Usage or runtime error, kept distinct so a broken invocation never reads as a clean repo.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- ============ CI ============ -->
+  <section class="section split" id="ci" aria-labelledby="ci-heading">
+    <div class="container">
+      <div class="split-copy">
+        <p class="eyebrow">// in ci</p>
+        <h2 id="ci-heading">Utility bloat stops landing on main.</h2>
+        <p>There is a <a href="https://github.com/marketplace/actions/normwind-tailwind-audit" style="color:var(--cyan)">first-party GitHub Action</a> that annotates the pull request inline and fails it when findings exist. On any other provider it is one command, because the exit code already says everything.</p>
+        <ul>
+          <li>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="m5 12 5 5 9-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span><b>Inline annotations</b> land on the exact class string, not in a log you have to go read.</span>
+          </li>
+          <li>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="m5 12 5 5 9-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span><b>Deterministic</b>: the bundled snapshot means no cold-boot Tailwind compile on every run.</span>
+          </li>
+          <li>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="m5 12 5 5 9-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span><b>Bounded</b>: a single run refuses to push more than 1,000 unique cache misses through the live canonicalizer, so scanning untrusted code cannot balloon into an out-of-memory crash.</span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="code-window">
+        <div class="code-bar">
+          <span class="term-dot r"></span><span class="term-dot y"></span><span class="term-dot g"></span>
+          <span class="code-filename">.github/workflows/normwind.yml</span>
+          <button class="copy-btn" id="copyBtn" type="button" aria-label="Copy the workflow to the clipboard">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.7"/><path d="M5 15V5a2 2 0 0 1 2-2h10" stroke="currentColor" stroke-width="1.7"/></svg>
+            <span id="copyLabel">Copy</span>
+          </button>
+        </div>
+        <pre class="code-body"><code id="ciCode"><span class="tok-key">name</span><span class="tok-punc">:</span> NormWind
+
+<span class="tok-key">on</span><span class="tok-punc">:</span>
+  <span class="tok-key">pull_request</span><span class="tok-punc">:</span>
+  <span class="tok-key">push</span><span class="tok-punc">:</span>
+    <span class="tok-key">branches</span><span class="tok-punc">:</span> [main]
+
+<span class="tok-key">permissions</span><span class="tok-punc">:</span>
+  <span class="tok-key">contents</span><span class="tok-punc">:</span> read
+
+<span class="tok-key">jobs</span><span class="tok-punc">:</span>
+  <span class="tok-key">tailwind-audit</span><span class="tok-punc">:</span>
+    <span class="tok-key">runs-on</span><span class="tok-punc">:</span> ubuntu-latest
+    <span class="tok-key">steps</span><span class="tok-punc">:</span>
+      <span class="tok-punc">-</span> <span class="tok-key">uses</span><span class="tok-punc">:</span> actions/checkout@v4
+      <span class="tok-punc">-</span> <span class="tok-key">uses</span><span class="tok-punc">:</span> LunarWerxs/NormWind@v3</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ FINAL CTA ============ -->
+  <section class="cta-final container">
+    <p class="eyebrow" style="justify-content:center;">// one command</p>
+    <h2>You don't have to install it to try it.</h2>
+    <p>Point it at the project and read the report. Nothing is written unless you ask for a fix.</p>
+    <div class="hero-actions">
+      <a class="btn btn-primary" href="https://www.npmjs.com/package/@lunawerx/normwind">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v13m0 0-4.5-4.5M12 16l4.5-4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 19.5h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        npx @lunawerx/normwind
+      </a>
+      <a class="btn btn-ghost" href="https://github.com/LunarWerxs/NormWind">
+        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2.15c-3.2.7-3.88-1.36-3.88-1.36-.53-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.26.73-1.55-2.56-.29-5.25-1.28-5.25-5.7 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.64 1.59.24 2.76.12 3.05.74.81 1.18 1.84 1.18 3.1 0 4.43-2.7 5.4-5.27 5.69.42.36.78 1.07.78 2.16v3.2c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
+        Read the docs
+      </a>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-grid">
+      <a class="footer-logo" href="https://lunarwerx.com" aria-label="LunarWerx Studios">
+        <img src="assets/lw_logo_white.png" alt="LunarWerx Studios">
+      </a>
+      <ul class="footer-links">
+        <li><a href="https://github.com/LunarWerxs/NormWind"><img src="assets/github_mark.png" alt="">GitHub</a></li>
+        <li><a href="https://www.npmjs.com/package/@lunawerx/normwind">npm</a></li>
+        <li><a href="https://github.com/LunarWerxs/NormWind/blob/main/LICENSE">MIT License</a></li>
+        <li><a href="https://lunarwerx.com">lunarwerx.com</a></li>
+      </ul>
+    </div>
+    <p class="footer-meta">Free, open-source software. Not affiliated with Tailwind Labs.</p>
+  </div>
+</footer>
+
+<script>
+  (function(){
+    var btn = document.getElementById('copyBtn');
+    var label = document.getElementById('copyLabel');
+    var code = document.getElementById('ciCode');
+    if(!btn) return;
+    btn.addEventListener('click', function(){
+      var text = code.innerText;
+      function done(ok){
+        label.textContent = ok ? 'Copied' : 'Copy failed';
+        setTimeout(function(){ label.textContent = 'Copy'; }, 1800);
+      }
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(text).then(function(){ done(true); }, function(){ done(false); });
+      } else {
+        try {
+          var ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+          done(true);
+        } catch(e){ done(false); }
+      }
+    });
+  })();
+</script>
+
+</body>
+</html>
