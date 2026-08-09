@@ -109,7 +109,13 @@ def release_notes_from_readme(new_version: str) -> str:
 
     summary_html = match.group("summary").strip()
     summary_text = html.unescape(re.sub(r"<[^>]+>", "", summary_html)).strip()
-    summary_text = summary_text.removeprefix("—").strip()
+    # The changelog separator after </strong> has varied over time (em-dash,
+    # then a colon once em-dashes were removed from the docs). Strip whichever
+    # one this entry uses so the release notes never open with punctuation.
+    # Escapes, not literals: these characters exist to be STRIPPED, and a
+    # future find-and-replace pass over the repo's punctuation must not silently
+    # empty the set.
+    summary_text = summary_text.lstrip(":" + "·–—").strip()
     intro = f"## NormWind v{new_version}"
     if summary_text:
         intro += f"\n\n_{summary_text}_"
@@ -499,7 +505,7 @@ def await_actions_publish(new_version: str, github_pat: str) -> None:
 
     sys.exit(
         f"The Release workflow succeeded but @lunawerx/normwind@{new_version} "
-        "has not appeared on the registry after 2 minutes — check npm manually."
+        "has not appeared on the registry after 2 minutes; check npm manually."
     )
 
 
@@ -615,7 +621,7 @@ def main() -> None:
     print(f"\nReleasing @lunawerx/normwind v{new_version}\n")
 
     # Pre-flight checks below must all pass before we touch git. The npm
-    # dry-run has to happen AFTER the local version bump — npm validates the
+    # dry-run has to happen AFTER the local version bump, because npm validates the
     # manifest version against the registry even in dry-run mode, so running
     # it at the old (already-published) version always fails. The bump is
     # local-only at that point; on dry-run failure it is restored so the

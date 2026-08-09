@@ -83,6 +83,7 @@ addCheck("package metadata", async () => {
     assert(pkg.dependencies?.["eslint-plugin-tailwindcss"], "eslint-plugin-tailwindcss dependency is missing");
     assert(!pkg.dependencies?.eslint, "eslint must not be a runtime dependency");
     assert(pkg.files.includes("bin/normwind.mjs"), "published files must include bin/normwind.mjs explicitly");
+    assert(pkg.files.includes("lib/*.mjs"), "published files must include lib/*.mjs; bin/normwind.mjs imports from it at runtime");
     assert(!pkg.files.includes("bin"), "published files must whitelist bin/normwind.mjs explicitly, not the entire bin/ directory (otherwise *.bak and other scratch files leak into the tarball)");
     assert(pkg.files.includes("docs/reference/canonical-replacements.json"), "published files must include canonical JSON snapshot");
     assert(pkg.files.includes("docs/reference/canonical-replacements.md"), "published files must include canonical MD snapshot");
@@ -408,11 +409,11 @@ addCheck("dry-run writes nothing", async () => {
 addCheck("fixall fault isolation: write failure", async () => {
     // NORMWIND_TEST_FORCE_WRITE_FAIL is a test-only hook (mirrors
     // NORMWIND_TEST_FORCE_TRANSFORM_THROW) that makes the atomic temp-file write
-    // throw EPERM for one named file — reproducing the real-world EBUSY/EPERM/
+    // throw EPERM for one named file, reproducing the real-world EBUSY/EPERM/
     // ENOSPC mode (an editor or antivirus holding the file, a read-only volume)
     // deterministically on every platform. A chmod-based read-only lock is
     // silently ignored under a root CI runner, so it can't be relied on here.
-    // This proves one file's write failure does not abort the batch — the other
+    // This proves one file's write failure does not abort the batch: the other
     // file still gets fixed, a summary is printed, and the process exits with the
     // dedicated partial-failure code (2), not 0 or 1.
     const dir = path.join(os.tmpdir(), `normwind-write-fail-${Date.now()}`);
@@ -746,6 +747,304 @@ addCheck("ignored directories", async () => {
     }
 });
 
+addCheck("shorthand merges never change rendered CSS", async () => {
+    // The guard these cases exercise is the reason --fix can be trusted at all.
+    // Each "unsafe" list contains a broader utility at a different value, so
+    // collapsing the narrow ones would hand the win to the broader one and
+    // silently change the rendered box.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "normwind-merge-safety-"));
+    try {
+        const unsafe = [
+            "mx-8 ml-2 mr-2",
+            "size-8 w-4 h-4",
+            "w-4 w-6 h-6",
+            "p-8 px-4 py-4",
+        ];
+        const safe = [
+            ["px-4 py-4", "p-4"],
+            ["w-6 h-6", "size-6"],
+            ["border-red-500 border-t-4 border-r-4 border-b-4 border-l-4", "border-red-500 border-4"],
+            ["overflow-hidden text-ellipsis whitespace-nowrap", "truncate"],
+            ["content-center justify-center", "place-content-center"],
+        ];
+
+        const lines = [
+            "<template>",
+            ...unsafe.map((classes, i) => `  <div class="${classes}">u${i}</div>`),
+            ...safe.map(([classes], i) => `  <div class="${classes}">s${i}</div>`),
+            "</template>",
+            "",
+        ];
+        const file = path.join(dir, "Merge.vue");
+        await fs.writeFile(file, lines.join("\n"), "utf8");
+
+        const fixResult = await run(NODE_BIN, [NORMWIND_BIN, "--fix", "Merge.vue"], { cwd: dir });
+        assert(fixResult.exitCode === 0 || fixResult.exitCode === 1, `--fix errored\n${fixResult.stderr}`);
+        const after = await fs.readFile(file, "utf8");
+
+        for (const classes of unsafe) {
+            assert(
+                after.includes(`class="${classes}"`),
+                `unsafe merge was applied to \`${classes}\`; --fix must leave it alone\n${after}`,
+            );
+        }
+        for (const [, expected] of safe) {
+            assert(
+                after.includes(`class="${expected}"`),
+                `safe merge to \`${expected}\` did not happen\n${after}`,
+            );
+        }
+
+        // The contract: a clean audit must imply the fixer is a no-op.
+        const audit = await run(NODE_BIN, [NORMWIND_BIN, "--json", "Merge.vue"], { cwd: dir });
+        const payload = parseCliJson(audit.stdout);
+        assert(payload.findingCount === 0, `re-audit after --fix still reports ${payload.findingCount} finding(s)`);
+        const before = await fs.readFile(file, "utf8");
+        const second = await run(NODE_BIN, [NORMWIND_BIN, "--fix", "Merge.vue"], { cwd: dir });
+        assert(second.exitCode === 0, `second --fix should be clean, got ${second.exitCode}`);
+        assert(await fs.readFile(file, "utf8") === before, "audit reported clean but --fix still rewrote the file");
+    } finally {
+        await rmrf(dir);
+    }
+});
+
+addCheck("composite equivalences are fixable, not just reportable", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "normwind-composite-"));
+    try {
+        const file = path.join(dir, "Composite.vue");
+        await fs.writeFile(
+            file,
+            '<template>\n  <div class="overflow-hidden text-ellipsis whitespace-nowrap">a</div>\n  <div class="self-end justify-self-end">b</div>\n</template>\n',
+            "utf8",
+        );
+        // Audit reports them...
+        const audit = await run(NODE_BIN, [NORMWIND_BIN, "--json", "Composite.vue"], { cwd: dir });
+        assert(parseCliJson(audit.stdout).findingCount === 2, "expected two composite findings");
+        // ...and the fixer clears them, so a fix-then-audit CI loop converges.
+        await run(NODE_BIN, [NORMWIND_BIN, "--fix", "Composite.vue"], { cwd: dir });
+        const after = await fs.readFile(file, "utf8");
+        assert(after.includes('class="truncate"'), `truncate was not applied\n${after}`);
+        assert(after.includes('class="place-self-end"'), `place-self-end was not applied\n${after}`);
+        const reaudit = await run(NODE_BIN, [NORMWIND_BIN, "Composite.vue"], { cwd: dir });
+        assert(reaudit.exitCode === 0, `fix-then-audit did not converge (exit ${reaudit.exitCode})`);
+    } finally {
+        await rmrf(dir);
+    }
+});
+
+addCheck("markup formats beyond Vue are scanned and fixed", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "normwind-markup-"));
+    try {
+        const files = {
+            "A.svelte": '<div class="px-4 py-4">s</div>\n<script lang="ts">let x: number = 1;</script>\n',
+            "B.astro": '---\nconst t = "x";\n---\n<div class="mt-2 mb-2">a</div>\n',
+            "C.html": '<html><body><div class="pl-3 pr-3">h</div></body></html>\n',
+        };
+        for (const [name, contents] of Object.entries(files)) {
+            await fs.writeFile(path.join(dir, name), contents, "utf8");
+        }
+
+        const audit = await run(NODE_BIN, [NORMWIND_BIN, "--json"], { cwd: dir });
+        const payload = parseCliJson(audit.stdout);
+        assert(payload.lintedFiles === 3, `expected 3 linted files, got ${payload.lintedFiles}`);
+        assert(payload.findingCount === 3, `expected 3 findings, got ${payload.findingCount}`);
+
+        await run(NODE_BIN, [NORMWIND_BIN, "--fix"], { cwd: dir });
+        assert((await fs.readFile(path.join(dir, "A.svelte"), "utf8")).includes('class="p-4"'), "svelte not fixed");
+        assert((await fs.readFile(path.join(dir, "B.astro"), "utf8")).includes('class="my-2"'), "astro not fixed");
+        assert((await fs.readFile(path.join(dir, "C.html"), "utf8")).includes('class="px-3"'), "html not fixed");
+    } finally {
+        await rmrf(dir);
+    }
+});
+
+addCheck("class-string builders (clsx/cva/tv) are extracted", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "normwind-builders-"));
+    try {
+        const file = path.join(dir, "Variants.tsx");
+        await fs.writeFile(
+            file,
+            [
+                'import { cva } from "class-variance-authority";',
+                'import clsx from "clsx";',
+                'const button = cva("inline-flex px-4 py-4", {',
+                '  variants: { size: { lg: "mt-3 mb-3" } },',
+                '  defaultVariants: { size: "lg" },',
+                '});',
+                'const extra = clsx("gap-x-2 gap-y-2", cond && "ml-5 mr-5");',
+                'const notClasses = clsx("hello world", "some-id");',
+                "",
+            ].join("\n"),
+            "utf8",
+        );
+
+        const audit = await run(NODE_BIN, [NORMWIND_BIN, "--json", "Variants.tsx"], { cwd: dir });
+        const payload = parseCliJson(audit.stdout);
+        assert(payload.findingCount === 4, `expected 4 builder findings, got ${payload.findingCount}`);
+
+        await run(NODE_BIN, [NORMWIND_BIN, "--fixall", "Variants.tsx"], { cwd: dir });
+        const after = await fs.readFile(file, "utf8");
+        assert(after.includes('cva("inline-flex p-4"'), `cva base string not fixed\n${after}`);
+        assert(after.includes('lg: "my-3"'), `cva variant string not fixed\n${after}`);
+        assert(after.includes('clsx("gap-2", cond && "mx-5")'), `clsx args not fixed\n${after}`);
+        // Variant KEYS and non-class strings must survive untouched.
+        assert(after.includes('defaultVariants: { size: "lg" }'), "variant key was rewritten");
+        assert(after.includes('clsx("hello world", "some-id")'), "non-class strings were rewritten");
+    } finally {
+        await rmrf(dir);
+    }
+});
+
+addCheck("reporters, --ignore and empty-match exit codes", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "normwind-cli-surface-"));
+    try {
+        await fs.mkdir(path.join(dir, "src"), { recursive: true });
+        await fs.mkdir(path.join(dir, "legacy"), { recursive: true });
+        await fs.writeFile(path.join(dir, "src", "A.vue"), '<template><div class="px-4 py-4">a</div></template>\n', "utf8");
+        await fs.writeFile(path.join(dir, "legacy", "B.vue"), '<template><div class="mt-2 mb-2">b</div></template>\n', "utf8");
+
+        // SARIF
+        const sarifRun = await run(NODE_BIN, [NORMWIND_BIN, "--reporter", "sarif"], { cwd: dir });
+        const sarif = JSON.parse(sarifRun.stdout);
+        assert(sarif.version === "2.1.0", "SARIF version must be 2.1.0");
+        assert(sarif.runs?.[0]?.tool?.driver?.name === "NormWind", "SARIF driver name is wrong");
+        assert(sarif.runs[0].results.length === 2, `expected 2 SARIF results, got ${sarif.runs[0].results.length}`);
+        const location = sarif.runs[0].results[0].locations[0].physicalLocation;
+        assert(typeof location.artifactLocation.uri === "string", "SARIF result has no artifact uri");
+        assert(Number.isInteger(location.region.startLine), "SARIF result has no start line");
+
+        // An unknown reporter is a usage error, not a silent fallback.
+        const badReporter = await run(NODE_BIN, [NORMWIND_BIN, "--reporter", "xml"], { cwd: dir });
+        assert(badReporter.exitCode === 2, `unknown --reporter must exit 2, got ${badReporter.exitCode}`);
+
+        // --ignore removes a path from the scan.
+        const ignored = await run(NODE_BIN, [NORMWIND_BIN, "--json", "--ignore", "legacy"], { cwd: dir });
+        assert(parseCliJson(ignored.stdout).findingCount === 1, "--ignore did not exclude the legacy directory");
+
+        // ...and so does a .normwindignore file.
+        await fs.writeFile(path.join(dir, ".normwindignore"), "# comment\nlegacy/\n", "utf8");
+        const ignoreFile = await run(NODE_BIN, [NORMWIND_BIN, "--json"], { cwd: dir });
+        assert(parseCliJson(ignoreFile.stdout).findingCount === 1, ".normwindignore was not honored");
+        await fs.rm(path.join(dir, ".normwindignore"));
+
+        // A pattern that matches nothing is a usage error, not a clean run:
+        // a typo'd CI path used to go green having scanned zero files.
+        const empty = await run(NODE_BIN, [NORMWIND_BIN, "src/**/*.svelte"], { cwd: dir });
+        assert(empty.exitCode === 2, `empty match must exit 2, got ${empty.exitCode}`);
+        const emptyAllowed = await run(NODE_BIN, [NORMWIND_BIN, "src/**/*.svelte", "--allow-empty"], { cwd: dir });
+        assert(emptyAllowed.exitCode === 0, `--allow-empty must exit 0, got ${emptyAllowed.exitCode}`);
+
+        // Flag combinations that used to be silently dropped.
+        for (const args of [["--fix", "--check-canonical"], ["--dry-run"]]) {
+            const result = await run(NODE_BIN, [NORMWIND_BIN, ...args], { cwd: dir });
+            assert(result.exitCode === 2, `${args.join(" ")} must exit 2, got ${result.exitCode}`);
+        }
+    } finally {
+        await rmrf(dir);
+    }
+});
+
+addCheck("packed tarball installs and runs as a consumer", async () => {
+    // Everything else drives bin/normwind.mjs straight out of the checkout,
+    // which is a different resolution root than what `npm i -g` produces.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "normwind-consumer-"));
+    let packedTarball = null;
+    const npm = (args) => (process.platform === "win32"
+        ? run(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", `npm ${args.join(" ")}`], { cwd: dir })
+        : run("npm", args, { cwd: dir }));
+    try {
+        // `npm pack` writes into the current directory. --pack-destination is
+        // avoided deliberately: it is not honored consistently across npm
+        // versions and sandboxed environments, whereas packing into REPO_ROOT
+        // and moving the tarball works everywhere. finally removes it.
+        const packed = process.platform === "win32"
+            ? await run(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", "npm pack --silent"])
+            : await run("npm", ["pack", "--silent"]);
+        assert(packed.ok, `npm pack failed\n${packed.stdout}\n${packed.stderr}`);
+        const tarball = packed.stdout.trim().split(/\r?\n/).filter(Boolean).pop();
+        assert(tarball, "npm pack printed no tarball name");
+        packedTarball = path.join(dir, tarball);
+        // copy + unlink, not rename: the repo and the OS temp dir are routinely
+        // on different volumes (EXDEV), which is the normal case on Windows.
+        await fs.copyFile(path.join(REPO_ROOT, tarball), packedTarball);
+        await fs.rm(path.join(REPO_ROOT, tarball), { force: true });
+
+        await fs.writeFile(
+            path.join(dir, "package.json"),
+            JSON.stringify({ name: "normwind-consumer", version: "1.0.0", private: true }),
+            "utf8",
+        );
+        // The tarball now sits in `dir`, which is also the install cwd, so a
+        // bare filename avoids every quoting difference between cmd.exe and sh.
+        const install = await npm(["install", "--no-audit", "--no-fund", "--silent", tarball]);
+        assert(install.ok, `installing the tarball failed\n${install.stdout}\n${install.stderr}`);
+
+        await fs.writeFile(path.join(dir, "App.vue"), '<template><div class="px-4 py-4">x</div></template>\n', "utf8");
+        // npm created its own launcher shims; their existence is npm's contract,
+        // not ours. What this check really proves is that the `files` allowlist
+        // ships everything the CLI needs at runtime and that its dependencies
+        // resolve from an installed location, so drive the installed entry
+        // point directly with node instead of fighting shell quoting.
+        const shimName = process.platform === "win32" ? "normwind.cmd" : "normwind";
+        const shimExists = await fs
+            .access(path.join(dir, "node_modules", ".bin", shimName))
+            .then(() => true)
+            .catch(() => false);
+        assert(shimExists, `npm did not create a ${shimName} shim for the installed package`);
+
+        const installedEntry = path.join(dir, "node_modules", "@lunawerx", "normwind", "bin", "normwind.mjs");
+        const audit = await run(NODE_BIN, [installedEntry, "--json", "App.vue"], { cwd: dir });
+        assert(
+            audit.stdout.trim().startsWith("{"),
+            `installed CLI produced no JSON (exit ${audit.exitCode})
+STDOUT: ${audit.stdout}
+STDERR: ${audit.stderr}`,
+        );
+        const payload = parseCliJson(audit.stdout);
+        assert(payload.findingCount === 1, `installed CLI reported ${payload.findingCount} findings, expected 1`);
+        assert(payload.findings[0].message.includes("p-4"), "installed CLI produced the wrong suggestion");
+    } finally {
+        // Never leave a tarball behind in the repo, even if the check threw
+        // between `npm pack` and the rename.
+        for (const entry of await fs.readdir(REPO_ROOT).catch(() => [])) {
+            if (entry.endsWith(".tgz")) {
+                await fs.rm(path.join(REPO_ROOT, entry), { force: true }).catch(() => {});
+            }
+        }
+        await rmrf(dir);
+    }
+});
+
+addCheck("lockfiles agree on dependency versions", async () => {
+    // package-lock.json is what `npm ci` (and therefore CI and the release
+    // workflow) installs from; bun.lock is what local development uses. A
+    // dependency bumped through one package manager must not leave the other
+    // silently pinned to the old version.
+    const pkg = await readJson(path.join(REPO_ROOT, "package.json"));
+    const declared = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
+    const bunLock = await fs.readFile(path.join(REPO_ROOT, "bun.lock"), "utf8").catch(() => null);
+    if (bunLock === null) {
+        return;
+    }
+    const npmLock = await readJson(path.join(REPO_ROOT, "package-lock.json"));
+
+    for (const [name, range] of Object.entries(declared)) {
+        const exact = /^\d/.test(range) ? range : null;
+        if (!exact) {
+            continue;
+        }
+        assert(
+            bunLock.includes(`"${name}@${exact}"`),
+            `bun.lock does not pin ${name}@${exact}; run \`bun install\` and commit the result`,
+        );
+        const entry = npmLock.packages?.[`node_modules/${name}`];
+        assert(
+            entry?.version === exact,
+            `package-lock.json pins ${name}@${entry?.version ?? "nothing"} but package.json declares ${exact}`,
+        );
+    }
+});
+
 addCheck("npm pack dry-run", async () => {
     const result = process.platform === "win32"
         ? await run(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", "npm pack --dry-run --json --silent"])
@@ -754,6 +1053,14 @@ addCheck("npm pack dry-run", async () => {
     const packs = JSON.parse(result.stdout);
     const files = new Set((packs[0]?.files ?? []).map((f) => f.path));
     assert(files.has("bin/normwind.mjs"), "pack is missing bin/normwind.mjs");
+    // Every lib/ module bin/normwind.mjs imports must ship, or the installed
+    // CLI dies on its first import. The consumer-install check above proves
+    // this end-to-end; this one names the missing file when it regresses.
+    const libModules = (await fs.readdir(path.join(REPO_ROOT, "lib"))).filter((f) => f.endsWith(".mjs"));
+    assert(libModules.length > 0, "lib/ has no modules; the split was reverted without updating this check");
+    for (const moduleName of libModules) {
+        assert(files.has(`lib/${moduleName}`), `pack is missing lib/${moduleName}`);
+    }
     assert(files.has("docs/reference/canonical-replacements.json"), "pack is missing canonical JSON snapshot");
     assert(files.has("docs/reference/canonical-replacements.md"), "pack is missing canonical MD snapshot");
     assert(files.has("README.md"), "pack is missing README.md");

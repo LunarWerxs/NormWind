@@ -13,9 +13,23 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
-        node: [20.x, 22.x]
+        # Three filesystem semantics: case-sensitive (Linux), case-insensitive
+        # with backslash separators (Windows), and case-insensitive-but-
+        # preserving (macOS). File discovery and the symlink-loop guard behave
+        # differently on each, so all three are exercised.
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        # 24.x matches the runtime the Marketplace Action itself declares
+        # (`using: node24` in action.yml).
+        node: [20.x, 22.x, 24.x]
+        exclude:
+          # Keep the matrix affordable: macOS only needs one Node to cover its
+          # filesystem semantics, which is the reason it is here.
+          - os: macos-latest
+            node: 20.x
+          - os: macos-latest
+            node: 22.x
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Smoke test the bundled Marketplace Action

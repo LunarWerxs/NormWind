@@ -18,6 +18,7 @@
   },
   "files": [
     "bin/normwind.mjs",
+    "lib/*.mjs",
     "docs/reference/canonical-replacements.json",
     "docs/reference/canonical-replacements.md",
     "README.md",
@@ -28,12 +29,13 @@
     "build:action:check": "node scripts/build-action.mjs --check",
     "canonical:extract": "node bin/normwind.mjs --extract-canonical --write-canonical-files",
     "canonical:check": "node bin/normwind.mjs --check-canonical",
-    "test": "node scripts/test-prepush.mjs && node scripts/test-action.mjs",
+    "test": "node scripts/test-units.mjs && node scripts/test-prepush.mjs && node scripts/test-action.mjs",
     "prepush": "npm test",
     "test:action": "node scripts/test-action.mjs",
     "test:regression": "node scripts/test-regression.mjs",
     "test:regression:update": "node scripts/test-regression.mjs --update",
-    "test:compare": "node scripts/test-compare.mjs"
+    "test:compare": "node scripts/test-compare.mjs",
+    "test:units": "node scripts/test-units.mjs"
   },
   "engines": {
     "node": ">=20"

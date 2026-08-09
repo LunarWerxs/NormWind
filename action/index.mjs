@@ -68,23 +68,27 @@ async function resolveWorkingDirectory() {
     return { workspace, workingDirectory };
 }
 
-function parsePatterns() {
-    const patterns = core
-        .getMultilineInput("patterns")
+function parseConfinedGlobs(name) {
+    const values = core
+        .getMultilineInput(name)
         .map((value) => value.trim())
         .filter(Boolean);
-    for (const pattern of patterns) {
-        const segments = pattern.replaceAll("\\", "/").split("/");
+    for (const value of values) {
+        const segments = value.replaceAll("\\", "/").split("/");
         if (
-            pattern.includes("\0")
-            || path.isAbsolute(pattern)
-            || path.win32.isAbsolute(pattern)
+            value.includes("\0")
+            || path.isAbsolute(value)
+            || path.win32.isAbsolute(value)
             || segments.includes("..")
         ) {
-            throw new Error(`Input "patterns" must stay inside the working directory: ${pattern}`);
+            throw new Error(`Input "${name}" must stay inside the working directory: ${value}`);
         }
     }
-    return patterns;
+    return values;
+}
+
+function parsePatterns() {
+    return parseConfinedGlobs("patterns");
 }
 
 async function resolveThemeCss(themeCss, { workspace, workingDirectory }) {
@@ -103,6 +107,73 @@ async function resolveThemeCss(themeCss, { workspace, workingDirectory }) {
         throw new Error(`Theme CSS entry is not a regular file: ${realPath}`);
     }
     return realPath;
+}
+
+// The SARIF target is written by the Action, not the scanner, so it is
+// validated the same way every other checkout-relative path is: no absolute
+// paths, no traversal, and the resolved parent must stay inside the workspace.
+// realpath cannot be used because the file does not exist yet, so the PARENT
+// directory is resolved instead.
+function resolveSarifTarget(sarifFile, { workspace, workingDirectory }) {
+    if (!sarifFile) {
+        return "";
+    }
+    const segments = sarifFile.replaceAll("\\", "/").split("/");
+    if (
+        sarifFile.includes("\0")
+        || path.isAbsolute(sarifFile)
+        || path.win32.isAbsolute(sarifFile)
+        || segments.includes("..")
+    ) {
+        throw new Error(`Input "sarif-file" must stay inside the working directory: ${sarifFile}`);
+    }
+    const candidate = path.resolve(workingDirectory, sarifFile);
+    if (!isInside(workspace, candidate)) {
+        throw new Error(`Input "sarif-file" must stay inside GITHUB_WORKSPACE: ${sarifFile}`);
+    }
+    return candidate;
+}
+
+function buildSarifFromPayload(payload) {
+    return {
+        $schema: "https://json.schemastore.org/sarif-2.1.0.json",
+        version: "2.1.0",
+        runs: [
+            {
+                tool: {
+                    driver: {
+                        name: "NormWind",
+                        version: payload.version,
+                        informationUri: "https://github.com/LunarWerxs/NormWind",
+                        rules: [
+                            {
+                                id: "tailwindcss/enforces-shorthand",
+                                name: "EnforcesShorthand",
+                                shortDescription: { text: "Tailwind classes can be normalized" },
+                                defaultConfiguration: { level: "warning" },
+                            },
+                        ],
+                    },
+                },
+                results: payload.findings.map((finding) => ({
+                    ruleId: "tailwindcss/enforces-shorthand",
+                    level: "warning",
+                    message: { text: String(finding?.message ?? "") },
+                    locations: [
+                        {
+                            physicalLocation: {
+                                artifactLocation: { uri: String(finding?.filePath ?? "") },
+                                region: {
+                                    startLine: Number.isInteger(finding?.line) && finding.line > 0 ? finding.line : 1,
+                                    startColumn: Number.isInteger(finding?.column) && finding.column > 0 ? finding.column : 1,
+                                },
+                            },
+                        },
+                    ],
+                })),
+            },
+        ],
+    };
 }
 
 function parseCliPayload(stdout) {
@@ -261,10 +332,15 @@ export async function runAction() {
     try {
         const { workspace, workingDirectory } = await resolveWorkingDirectory();
         const patterns = parsePatterns();
+        const ignores = parseConfinedGlobs("ignore");
         const failOnFindings = parseBooleanInput("fail-on-findings", true);
         const suggestNamedThemeVars = parseBooleanInput("suggest-named-theme-vars", false);
         const maxAnnotations = parseIntegerInput("max-annotations", 10, { min: 0, max: 50 });
         const themeCss = await resolveThemeCss(core.getInput("theme-css").trim(), {
+            workspace,
+            workingDirectory,
+        });
+        const sarifFile = resolveSarifTarget(core.getInput("sarif-file").trim(), {
             workspace,
             workingDirectory,
         });
@@ -279,6 +355,9 @@ export async function runAction() {
         }
         if (suggestNamedThemeVars) {
             args.push("--suggest-named-theme-vars");
+        }
+        for (const ignore of ignores) {
+            args.push("--ignore", ignore);
         }
 
         core.info(`Running NormWind in ${workingDirectory}`);
@@ -295,6 +374,12 @@ export async function runAction() {
         core.setOutput("linted-files", payload.lintedFiles);
         core.setOutput("exit-code", execution.exitCode);
         core.setOutput("report-path", reportPath);
+
+        if (sarifFile) {
+            await fs.mkdir(path.dirname(sarifFile), { recursive: true });
+            await fs.writeFile(sarifFile, `${JSON.stringify(buildSarifFromPayload(payload), null, 2)}\n`, "utf8");
+            core.setOutput("sarif-path", sarifFile);
+        }
 
         const annotatedCount = Math.min(findings.length, maxAnnotations);
         for (const finding of findings.slice(0, annotatedCount)) {

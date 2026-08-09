@@ -352,6 +352,164 @@ addCheck("invalid inputs and workspace escapes fail closed", async () => {
     }
 });
 
+addCheck("sarif-file and ignore inputs", async () => {
+    const runResult = await runAction({
+        files: {
+            "src/Bad.vue": FINDING_SOURCE,
+            "legacy/Old.vue": FINDING_SOURCE.replace("Finding", "Old"),
+        },
+        inputs: {
+            "FAIL-ON-FINDINGS": "false",
+            IGNORE: "legacy",
+            "SARIF-FILE": "reports/normwind.sarif",
+        },
+    });
+    try {
+        assert(runResult.exitCode === 0, `${runResult.stdout}\n${runResult.stderr}`);
+        assert(runResult.outputs["finding-count"] === "1", `ignore input was not applied: ${JSON.stringify(runResult.outputs)}`);
+        const sarifPath = runResult.outputs["sarif-path"];
+        assert(sarifPath, "sarif-path output was not set");
+        const sarif = JSON.parse(await fs.readFile(sarifPath, "utf8"));
+        assert(sarif.version === "2.1.0", "SARIF version must be 2.1.0");
+        assert(sarif.runs[0].results.length === 1, `expected 1 SARIF result, got ${sarif.runs[0].results.length}`);
+        assert(
+            sarif.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri.includes("Bad.vue"),
+            "SARIF result points at the wrong file",
+        );
+    } finally {
+        await runResult.cleanup();
+    }
+
+    const escaping = await runAction({
+        files: { "src/Clean.vue": CLEAN_SOURCE },
+        inputs: { "SARIF-FILE": "../escape.sarif" },
+    });
+    try {
+        assert(escaping.exitCode === 1, escaping.stdout);
+        assert(escaping.outputs.result === "error", JSON.stringify(escaping.outputs));
+        assert(escaping.stdout.includes("must stay inside"), escaping.stdout);
+    } finally {
+        await escaping.cleanup();
+    }
+});
+
+// The Action's first line of defence lives in action/index.mjs and is covered
+// above. These checks exercise the SECOND line: the NORMWIND_ACTION_WORKSPACE
+// guards inside the scanner itself (assertInsideActionWorkspace,
+// resolveActionSafePath, validateActionPattern, the directory-symlink refusals).
+// Those are what stop a hostile checkout that gets a path past the wrapper, and
+// nothing used to test them at all.
+const CLI_ENTRY = path.join(REPO_ROOT, "dist", "normwind.mjs");
+
+async function runScannerInWorkspace(args, { workspace, cwd = workspace }) {
+    return run(process.execPath, [CLI_ENTRY, ...args], {
+        cwd,
+        env: {
+            NORMWIND_ACTION_WORKSPACE: workspace,
+            NORMWIND_DISABLE_DISK_CACHE: "1",
+            NORMWIND_DISABLE_RIPGREP: "1",
+            NORMWIND_FORCE_BUNDLED_RUNTIME: "1",
+            NORMWIND_BUNDLED_TAILWIND_CSS: path.join(REPO_ROOT, "dist", "tailwindcss-index.css"),
+        },
+    });
+}
+
+async function trySymlink(target, linkPath, type) {
+    try {
+        await fs.symlink(target, linkPath, type);
+        return true;
+    } catch {
+        // Windows needs Developer Mode or elevation for symlinks. Skipping is
+        // correct there; Linux and macOS CI still cover these paths.
+        return false;
+    }
+}
+
+addCheck("scanner refuses paths that escape the Action workspace", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "normwind-action-escape-"));
+    const workspace = path.join(tempRoot, "workspace");
+    try {
+        await fs.mkdir(path.join(workspace, "src"), { recursive: true });
+        await fs.writeFile(path.join(workspace, "src", "A.vue"), CLEAN_SOURCE, "utf8");
+        await fs.writeFile(path.join(tempRoot, "outside.css"), "@theme { --color-x: red; }\n", "utf8");
+        await fs.writeFile(path.join(tempRoot, "Outside.vue"), FINDING_SOURCE, "utf8");
+
+        // A traversing pattern must never be scanned.
+        const traversal = await runScannerInWorkspace(["../Outside.vue", "--json"], { workspace });
+        assert(traversal.exitCode === 2, `traversal pattern should exit 2, got ${traversal.exitCode}`);
+        assert(
+            /must stay inside the working directory/.test(traversal.stderr),
+            `expected a workspace-escape error, got: ${traversal.stderr}`,
+        );
+
+        // An absolute path outside the workspace, likewise.
+        const absolute = await runScannerInWorkspace([path.join(tempRoot, "Outside.vue"), "--json"], { workspace });
+        assert(absolute.exitCode === 2, `absolute outside path should exit 2, got ${absolute.exitCode}`);
+
+        // A theme CSS entry that only escapes once resolved through a symlink
+        // has to be caught by realpath, not by string inspection.
+        const linkedTheme = path.join(workspace, "theme.css");
+        if (await trySymlink(path.join(tempRoot, "outside.css"), linkedTheme, "file")) {
+            const themeEscape = await runScannerInWorkspace(
+                ["src/A.vue", "--json", "--theme-css", "theme.css"],
+                { workspace },
+            );
+            assert(themeEscape.exitCode === 2, `symlinked theme escape should exit 2, got ${themeEscape.exitCode}`);
+            assert(
+                /escapes the checked-out workspace/.test(themeEscape.stderr),
+                `expected a realpath escape error, got: ${themeEscape.stderr}`,
+            );
+            await fs.rm(linkedTheme, { force: true });
+        }
+
+        // Directory symlinks are refused outright in Action mode, escaping or
+        // not, because following one makes the scanned set unverifiable.
+        const linkedDir = path.join(workspace, "linked");
+        if (await trySymlink(path.join(tempRoot), linkedDir, "dir")) {
+            const dirLink = await runScannerInWorkspace(["--json"], { workspace });
+            assert(dirLink.exitCode === 2, `directory symlink should exit 2, got ${dirLink.exitCode}`);
+            assert(
+                /refuses directory symlink/.test(dirLink.stderr),
+                `expected a directory-symlink refusal, got: ${dirLink.stderr}`,
+            );
+            await fs.rm(linkedDir, { force: true, recursive: true });
+        }
+
+        // The happy path still works with the guards armed.
+        const clean = await runScannerInWorkspace(["src/A.vue", "--json"], { workspace });
+        assert(clean.exitCode === 0, `guarded clean scan should exit 0, got ${clean.exitCode}\n${clean.stderr}`);
+    } finally {
+        await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+});
+
+addCheck("Action mode ignores a checkout-supplied ignore file", async () => {
+    // .normwindignore is checkout-controlled. Honoring it inside the Action
+    // would let a pull request silence the audit on exactly the files it
+    // changed, so the file is read only outside Action mode.
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "normwind-action-ignore-"));
+    const workspace = path.join(tempRoot, "workspace");
+    try {
+        await fs.mkdir(path.join(workspace, "src"), { recursive: true });
+        await fs.writeFile(path.join(workspace, "src", "Bad.vue"), FINDING_SOURCE, "utf8");
+        await fs.writeFile(path.join(workspace, ".normwindignore"), "src/\n", "utf8");
+
+        const guarded = await runScannerInWorkspace(["--json"], { workspace });
+        const payload = JSON.parse(guarded.stdout.slice(guarded.stdout.indexOf("{")));
+        assert(payload.findingCount === 1, `Action mode honored a checkout ignore file: ${guarded.stdout}`);
+
+        // Outside Action mode the same file IS honored.
+        const local = await run(process.execPath, [CLI_ENTRY, "--json"], {
+            cwd: workspace,
+            env: { NORMWIND_DISABLE_DISK_CACHE: "1", NORMWIND_DISABLE_RIPGREP: "1" },
+        });
+        const localPayload = JSON.parse(local.stdout.slice(local.stdout.indexOf("{")));
+        assert(localPayload.findingCount === 0, `.normwindignore was not honored locally: ${local.stdout}`);
+    } finally {
+        await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+});
+
 addCheck("theme suggestions require a theme entry", async () => {
     const runResult = await runAction({
         files: { "src/Clean.vue": CLEAN_SOURCE },

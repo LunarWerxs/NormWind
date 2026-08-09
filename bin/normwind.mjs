@@ -12,6 +12,40 @@ import * as bundledBabelParser from "@babel/parser";
 import bundledTailwindGroupsModule from "eslint-plugin-tailwindcss/lib/config/groups.js";
 import * as bundledTailwind from "tailwindcss";
 import bundledTailwindPackage from "tailwindcss/package.json" with { type: "json" };
+import { ROOT_FONT_SIZE_PX } from "../lib/constants.mjs";
+import {
+    cssRuleBodiesAreEquivalent,
+    maskCssComments,
+    winningDeclarations,
+} from "../lib/css.mjs";
+import { globPatternToRegExp, hasGlobSyntax } from "../lib/glob.mjs";
+import { buildSarifReport } from "../lib/sarif.mjs";
+import {
+    buildLineStarts,
+    findBalancedBraceEnd,
+    findRawElementClose,
+    indexToLineCol,
+    parseMarkupTag,
+    splitTemplateStaticChunks,
+} from "../lib/text.mjs";
+import {
+    buildFixToken,
+    formatClass,
+    getKnownCanonicalClass,
+    getUtilityBodyCandidates,
+    isLikelyFixUtility,
+    isLikelyTailwindUtility,
+    matchFixBodyValue,
+    matchUtilityToBody,
+    parseClassToken,
+    parseFixToken,
+    stripBracketedSegments,
+} from "../lib/tokens.mjs";
+import {
+    expandValueVariants,
+    extractFractionPercent,
+    multiplyLength,
+} from "../lib/units.mjs";
 
 const execFileAsync = promisify(execFile);
 const PACKAGE_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -21,8 +55,11 @@ const bundledRequire = createRequire(import.meta.url);
 // tarball, so the version is read from it rather than duplicated here.
 const NORMWINDS_VERSION = bundledRequire("../package.json").version;
 const RULE_ID = "tailwindcss/enforces-shorthand";
-const DEFAULT_PATTERNS = ["**/*.{vue,js,mjs,ts,jsx,tsx}"];
-const ROOT_FONT_SIZE_PX = 16;
+const DEFAULT_PATTERNS = ["**/*.{vue,svelte,astro,html,js,mjs,cjs,ts,jsx,tsx,mts,cts}"];
+// Markup-first formats: a class attribute is the dominant shape, so a single
+// bracket-bearing token in one is worth canonicalizing on its own, and `--fix`
+// (as opposed to `--fixall`) covers them.
+const MARKUP_EXTENSIONS = new Set([".vue", ".svelte", ".astro", ".html", ".htm"]);
 const FILE_SCAN_CONCURRENCY = 32;
 // Tailwind's unstable canonicalizer grows very quickly with thousands of
 // unique cache misses. Fail predictably before a small adversarial source file
@@ -47,36 +84,46 @@ const BUNDLED_CANONICAL_JSON = path.resolve(
     PACKAGE_ROOT,
     "docs/reference/canonical-replacements.json",
 );
-// The ripgrep glob list and the walkDirectory sets below must describe the
-// SAME contract — rg additionally honors .gitignore, so anything that relies
-// on .gitignore alone would silently diverge on machines without rg.
-const RG_IGNORE_GLOBS = [
-    "!.git",
-    "!.chrome-profile/**",
-    "!.chrome-profile-headless/**",
-    "!.tmp/**",
-    "!.saydeploy/**",
-    "!.venv/**",
-    "!**/.venv/**",
-    "!dist/**",
-    "!**/dist/**",
-    "!infra/aws/bin/app.js",
-    "!node_modules/**",
-    "!**/node_modules/**",
-    "!test-results/**",
-    "!**/test-results/**",
-    "!**/cdk.out/**",
-];
-const IGNORED_SEGMENTS = new Set([".git", ".venv", "cdk.out", "dist", "node_modules", "test-results"]);
+// Directory names that are never hand-authored source, at ANY depth.
+const IGNORED_SEGMENTS = new Set([
+    ".git",
+    ".venv",
+    ".next",
+    ".nuxt",
+    ".output",
+    ".svelte-kit",
+    ".astro",
+    ".turbo",
+    "cdk.out",
+    "dist",
+    "node_modules",
+    "storybook-static",
+    "test-results",
+]);
+// Names that are conventionally build output at the project root but are
+// perfectly ordinary source directory names further down (`src/lib/build/`,
+// `app/components/out/`), so they are only ignored at the root.
 const IGNORED_ROOT_PREFIXES = [
-    ".chrome-profile/",
-    ".chrome-profile-headless/",
+    ".cache/",
     ".tmp/",
-    ".saydeploy/",
+    "build/",
+    "coverage/",
     "dist/",
+    "out/",
     "test-results/",
+    "vendor/",
 ];
-const IGNORED_EXACT_PATHS = new Set(["infra/aws/bin/app.js"]);
+const IGNORED_EXACT_PATHS = new Set();
+
+// The ripgrep glob list and the walkDirectory sets above must describe the
+// SAME contract - rg additionally honors .gitignore, so anything that relies
+// on .gitignore alone would silently diverge on machines without rg. Derive
+// the globs from the sets so the two can never drift apart by hand.
+const RG_IGNORE_GLOBS = [
+    ...[...IGNORED_SEGMENTS].flatMap((segment) => [`!${segment}/**`, `!**/${segment}/**`]),
+    ...IGNORED_ROOT_PREFIXES.map((prefix) => `!${prefix}**`),
+    ...[...IGNORED_EXACT_PATHS].map((exact) => `!${exact}`),
+];
 
 const CACHE_FILE = path.resolve(process.cwd(), "node_modules/.cache/normwinds/canonical-cache.json");
 const CACHE_SCHEMA_VERSION = 1;
@@ -92,6 +139,24 @@ const ACTION_MAX_THEME_BYTES = 5 * 1024 * 1024;
 function isInsidePath(parent, child) {
     const relative = path.relative(parent, child);
     return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+}
+
+// Portable form of a resolved dependency path, for anything that gets written into a
+// committed artifact.
+//
+// `require.resolve` returns the REAL path, and a package does not have to live inside the
+// package root: under a shared/global package store (bun's isolated linker + globalStore,
+// pnpm, yarn) `node_modules/<pkg>` is a symlink and the real file sits outside the checkout
+// entirely. `path.relative(PACKAGE_ROOT, ...)` then produces machine-specific `../../..`
+// noise, and --check-canonical fails on every machine whose store is somewhere else.
+//
+// Fall back to the node_modules-relative form, which is stable across every layout.
+function toPortableModulePath(root, absolutePath) {
+    const relative = path.relative(root, absolutePath).replace(/\\/g, "/");
+    if (!relative.startsWith("../")) return relative;
+    const posix = absolutePath.replace(/\\/g, "/");
+    const marker = posix.lastIndexOf("/node_modules/");
+    return marker === -1 ? relative : posix.slice(marker + 1);
 }
 
 function assertInsideActionWorkspace(filePath, label) {
@@ -177,7 +242,7 @@ const CSS_IMPORT_REGEX = /@import\s+(["'])([^"']+)\1[^;]*;\s*/g;
 
 // True when an @import target is a local file path (`./x`, `../x`, `/x`).
 // Anything else (`tailwindcss`, `tailwindcss/preflight`, `@scope/pkg`, URLs)
-// is treated as a package/runtime import and dropped — Tailwind's own CSS is
+// is treated as a package/runtime import and dropped. Tailwind's own CSS is
 // already prepended by the caller, and other package imports cannot be
 // resolved without a real bundler.
 function isLocalCssImportSpecifier(spec) {
@@ -202,13 +267,15 @@ async function readThemeCssSource(filePath, budget) {
     return fs.readFile(filePath, "utf8");
 }
 
-// Recursively inline local @import directives into the source CSS so
-// Tailwind's design-system loader sees the project's @theme blocks even when
-// they live in files imported from the entry CSS.
+
 async function inlineLocalCssImports(sourceCss, sourcePath, visited, budget) {
     const sourceDir = path.dirname(sourcePath);
     const parts = [];
     let lastIndex = 0;
+    // A commented-out `@import "./old-theme.css";` is not an import. Match
+    // against a comment-masked copy (same length, so every index still lines
+    // up) and slice the real text.
+    const scannable = maskCssComments(sourceCss);
     // A fresh RegExp per recursion frame is required. Sharing the module-level
     // global instance lets a nested import reset its parent's lastIndex, which
     // can duplicate the CSS between imports and change last-declaration-wins
@@ -216,7 +283,7 @@ async function inlineLocalCssImports(sourceCss, sourcePath, visited, budget) {
     const importRegex = new RegExp(CSS_IMPORT_REGEX.source, CSS_IMPORT_REGEX.flags);
 
     let match;
-    while ((match = importRegex.exec(sourceCss)) !== null) {
+    while ((match = importRegex.exec(scannable)) !== null) {
         parts.push(sourceCss.slice(lastIndex, match.index));
         lastIndex = importRegex.lastIndex;
 
@@ -238,7 +305,7 @@ async function inlineLocalCssImports(sourceCss, sourcePath, visited, budget) {
             );
         }
         if (visited.has(importedAbs)) {
-            // Already inlined upstream — silently skip to avoid cycles and
+            // Already inlined upstream, so skip it to avoid cycles and
             // duplicate @theme blocks.
             continue;
         }
@@ -417,7 +484,7 @@ async function saveDiskCache() {
             throw error;
         }
     } catch {
-        // Cache persistence is best-effort — never fail the run.
+        // Cache persistence is best-effort; never fail the run.
     }
 }
 
@@ -432,7 +499,23 @@ async function loadCanonicalSnapshot() {
     const paths = ACTION_WORKSPACE_ROOT
         ? [BUNDLED_CANONICAL_JSON]
         : [...new Set([CANONICAL_OUTPUT_JSON, BUNDLED_CANONICAL_JSON])];
-    const { tailwindPkg } = loadTailwind();
+    const { tailwindPkg, tailwindRequire, tailwindIndexCssPath: configuredCssPath } = loadTailwind();
+
+    // A snapshot's identity is not the Tailwind version alone: canonicalization
+    // results also depend on which CSS entry produced them and on the rem base.
+    // extractCanonicalReplacements records both, so validate both. Resolving
+    // the CSS path is a plain require.resolve, not a design-system load.
+    let expectedIndexCssPath = null;
+    try {
+        expectedIndexCssPath = toPortableModulePath(
+            PACKAGE_ROOT,
+            configuredCssPath || tailwindRequire.resolve("tailwindcss/index.css"),
+        );
+    } catch {
+        // Unresolvable here means the snapshot cannot be validated against a
+        // known entry; fall back to accepting on version alone rather than
+        // discarding a snapshot that is probably fine.
+    }
 
     for (const snapshotPath of paths) {
         try {
@@ -443,6 +526,19 @@ async function loadCanonicalSnapshot() {
                 !parsed ||
                 parsed.source?.tailwindVersion !== tailwindPkg.version ||
                 !Array.isArray(parsed.replacements)
+            ) {
+                continue;
+            }
+            if (
+                expectedIndexCssPath &&
+                typeof parsed.source?.tailwindIndexCssPath === "string" &&
+                parsed.source.tailwindIndexCssPath !== expectedIndexCssPath
+            ) {
+                continue;
+            }
+            if (
+                parsed.source?.rootFontSizePx !== undefined &&
+                parsed.source.rootFontSizePx !== ROOT_FONT_SIZE_PX
             ) {
                 continue;
             }
@@ -490,6 +586,15 @@ async function getCanonicalizeCandidate() {
             // design system); skip it if everything is in-cache.
             validateCacheAgainstTailwindVersion();
             const { designSystem } = await loadTailwindDesignSystem();
+            if (typeof designSystem.canonicalizeCandidates !== "function") {
+                // --extract-canonical throws for exactly this condition; the
+                // scan path degrades instead, but silently degrading a whole
+                // class of fixes with no signal is worse than a warning.
+                const { tailwindPkg, source } = loadTailwind();
+                console.error(
+                    `normwinds: the resolved Tailwind (${source} v${tailwindPkg.version}) does not expose canonicalizeCandidates; arbitrary-value canonicalization is disabled for this run.`,
+                );
+            }
             return (candidate) => {
                 if (!candidate || typeof candidate !== "string") {
                     return candidate;
@@ -707,42 +812,8 @@ async function getThemeVarResolver({ themeCssPath = null } = {}) {
     return themeVarResolverPromise;
 }
 
-function normalizeCssForCompare(css) {
-    return String(css).replace(/\s+/g, " ").trim();
-}
 
-// Strip the outer selector (everything up to and including the first `{`)
-// and the matching closing `}`, leaving only the rule body. Tailwind's
-// `candidatesToCss` output for a single class always wraps the declarations
-// in exactly one top-level rule.
-function extractCssRuleBody(css) {
-    const text = String(css ?? "");
-    const open = text.indexOf("{");
-    if (open < 0) return "";
-    const close = text.lastIndexOf("}");
-    if (close <= open) return "";
-    return normalizeCssForCompare(text.slice(open + 1, close));
-}
 
-// Compare two Tailwind-generated CSS rule strings (selectors ignored) under
-// the assumption that the only allowed difference is: any `var(--themeKey)`
-// reference in the candidate may be expanded to `var(--forwarded)` per the
-// design system's @theme forwarder. This treats the candidate as
-// runtime-equivalent because `--themeKey: var(--forwarded)` is a CSS custom-
-// property forwarder that re-resolves at every use site.
-function cssRuleBodiesAreEquivalent(originalCss, candidateCss, themeKeyToForwarded) {
-    const a = extractCssRuleBody(originalCss);
-    const b = extractCssRuleBody(candidateCss);
-    if (!a || !b) return false;
-    if (a === b) return true;
-
-    const substituted = b.replace(/var\(\s*(--[a-z0-9-]+)\s*([^)]*)\)/gi, (full, name, rest) => {
-        const forwarded = themeKeyToForwarded.get(name);
-        if (!forwarded) return full;
-        return `var(${forwarded}${rest || ""})`;
-    });
-    return substituted === a;
-}
 
 function lookupThemeVarReplacementFromMemo(rawToken) {
     if (!rawToken || typeof rawToken !== "string") return undefined;
@@ -763,27 +834,7 @@ function tokenLooksLikeNamedThemeVarCandidate(rawToken) {
     );
 }
 
-const KNOWN_CANONICAL_UTILITY_REPLACEMENTS = new Map([
-    [["break", "words"].join("-"), ["wrap", "break", "word"].join("-")],
-]);
 
-function getKnownCanonicalClass(raw) {
-    if (!raw || typeof raw !== "string") {
-        return null;
-    }
-
-    const token = parseFixToken(raw);
-    const utility = KNOWN_CANONICAL_UTILITY_REPLACEMENTS.get(token.utility);
-    if (!utility) {
-        return null;
-    }
-
-    return buildFixToken({
-        variants: token.variants,
-        utility,
-        important: token.important,
-    });
-}
 
 const COMPLEX_EQUIVALENCES = {
     placeContentOptions: [
@@ -861,9 +912,208 @@ function getShorthandFamilies() {
     return { families: shorthandFamiliesCache, bodyIndex: familyBodyIndexCache };
 }
 
-const UTILITY_BODY_CANDIDATES_CACHE = new Map();
+// ---------------------------------------------------------------------------
+// Merge safety
+//
+// A shorthand merge is only sound when the class list renders identically
+// before and after. Collapsing `ml-2 mr-2` into `mx-2` moves the declaration
+// from the per-side level up to the axis level, and Tailwind emits utilities
+// in ITS OWN order (broad before narrow, and same-utility candidates sorted
+// by value) rather than in authoring order. So a pre-existing `mx-8` that the
+// two sides used to override starts winning after the merge, silently
+// changing the rendered margin. The same trap applies to `w-*`/`h-*` ->
+// `size-*` and to every four-sides/corner rule.
+//
+// The cheap syntactic pre-filter (mergeHasValueConflict) finds the only shape
+// that can go wrong: another token in the same variant/important group that
+// shares a body with the merge target or one of its sources at a different
+// value. Only then is Tailwind consulted for the authoritative answer, so the
+// overwhelmingly common case still never loads the design system.
+//
+// When Tailwind cannot answer (older engine, load failure, cold cache in a
+// path that cannot await), the merge is refused. Refusing costs a suggestion;
+// allowing costs the user a silent visual regression.
+// ---------------------------------------------------------------------------
+const MERGE_SAFETY_CACHE_PREFIX = "mergesafe:";
+const MAX_MERGE_SAFETY_KEY_LENGTH = 4096;
+// Each round resolves the pairs the previous one could not answer. Merges are
+// iterative, so a later merge only becomes visible once an earlier one lands.
+// Every round strictly grows the memo, so this terminates well before the cap.
+const MAX_MERGE_SAFETY_ROUNDS = 6;
+
+function buildMergeSafetyKey(before, after) {
+    // Commas, not spaces: isSafeCacheEntry rejects whitespace in cache keys so
+    // the entry can round-trip through the on-disk cache.
+    return `${MERGE_SAFETY_CACHE_PREFIX}${before.join(",")}=>${after.join(",")}`;
+}
+
+
+
+
+let mergeSafetyPromise = null;
+async function getMergeSafetyChecker() {
+    if (!mergeSafetyPromise) {
+        mergeSafetyPromise = (async () => {
+            validateCacheAgainstTailwindVersion();
+            const { designSystem } = await loadTailwindDesignSystem();
+            if (
+                typeof designSystem.getClassOrder !== "function" ||
+                typeof designSystem.candidatesToCss !== "function"
+            ) {
+                return null;
+            }
+
+            return (before, after) => {
+                const key = buildMergeSafetyKey(before, after);
+                if (key.length > MAX_MERGE_SAFETY_KEY_LENGTH) {
+                    return false;
+                }
+                const cached = CANONICAL_MEMO.get(key);
+                if (cached !== undefined) {
+                    return cached === "1";
+                }
+
+                const beforeDeclarations = winningDeclarations(designSystem, before);
+                const afterDeclarations = winningDeclarations(designSystem, after);
+                let safe = false;
+                if (
+                    beforeDeclarations &&
+                    afterDeclarations &&
+                    beforeDeclarations.size === afterDeclarations.size
+                ) {
+                    safe = true;
+                    for (const [property, value] of beforeDeclarations) {
+                        if (afterDeclarations.get(property) !== value) {
+                            safe = false;
+                            break;
+                        }
+                    }
+                }
+
+                CANONICAL_MEMO.set(key, safe ? "1" : "0");
+                DYNAMIC_CACHE_KEYS.add(key);
+                diskCacheDirty = true;
+                return safe;
+            };
+        })();
+    }
+    return mergeSafetyPromise;
+}
+
+// Memo-only view of the same answer, for hot paths that must stay synchronous
+// and cannot await the design system. `undefined` means "never resolved".
+function lookupMergeSafetyFromMemo(before, after) {
+    const key = buildMergeSafetyKey(before, after);
+    if (key.length > MAX_MERGE_SAFETY_KEY_LENGTH) {
+        return false;
+    }
+    const cached = CANONICAL_MEMO.get(key);
+    return cached === undefined ? undefined : cached === "1";
+}
+
+// A probe answers from the memo and records anything it cannot answer, so a
+// caller can resolve the whole batch with one design-system load and replay.
+// Used by both the audit sweep and the fix pass; a run whose class lists have
+// no conflicting siblings records nothing and never loads Tailwind at all.
+function createMergeSafetyProbe() {
+    const pending = [];
+    const seen = new Set();
+    const probe = (before, after) => {
+        const verdict = lookupMergeSafetyFromMemo(before, after);
+        if (verdict !== undefined) {
+            return verdict;
+        }
+        const key = buildMergeSafetyKey(before, after);
+        if (!seen.has(key)) {
+            seen.add(key);
+            pending.push([before, after]);
+        }
+        return undefined;
+    };
+    probe.pending = pending;
+    return probe;
+}
+
+// Resolve everything a probe recorded. Returns true when the memo now has an
+// answer for every pending pair, so the caller can replay against it.
+async function resolvePendingMergeChecks(pending) {
+    if (pending.length === 0) {
+        return false;
+    }
+    const mergeSafety = await getMergeSafetyChecker().catch((error) => {
+        console.error(
+            `normwinds: could not load Tailwind to verify shorthand merge safety; affected suggestions were skipped (${error?.message || String(error)})`,
+        );
+        return null;
+    });
+    if (!mergeSafety) {
+        return false;
+    }
+    for (const [before, after] of pending) {
+        mergeSafety(before, after);
+    }
+    return true;
+}
+
+// True when another token in the same group shares a body with the merge
+// target or one of its sources at a DIFFERENT value. That is the only shape
+// in which a merge can change which declaration wins.
+function mergeHasValueConflict(bodyValues, family, sourceShorthands, targetShorthand, negValue) {
+    if (!bodyValues) {
+        return false;
+    }
+    for (const shorthand of [targetShorthand, ...sourceShorthands]) {
+        const body = family.shorthandToBody.get(shorthand);
+        if (!body) {
+            continue;
+        }
+        const seen = bodyValues.get(body);
+        if (!seen) {
+            continue;
+        }
+        for (const candidate of seen) {
+            if (candidate !== negValue) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Shared decision for both the audit and the fix path: given the raw tokens of
+// one variant/important group, is replacing `sourceRaws` with `targetRaw`
+// render-identical? `mergeSafety` is the resolved checker (or null/undefined
+// when Tailwind was never loaded), and a conflict it cannot answer is refused.
+function mergeIsRenderSafe(groupRaws, sourceRaws, targetRaw, hasConflict, mergeSafety) {
+    if (!hasConflict) {
+        return true;
+    }
+    if (typeof mergeSafety !== "function") {
+        return false;
+    }
+    const consumed = new Set(sourceRaws);
+    const after = [];
+    let inserted = false;
+    for (const raw of groupRaws) {
+        if (consumed.has(raw)) {
+            if (!inserted) {
+                after.push(targetRaw);
+                inserted = true;
+            }
+            continue;
+        }
+        after.push(raw);
+    }
+    if (!inserted) {
+        after.push(targetRaw);
+    }
+    const verdict = mergeSafety(groupRaws, after);
+    return verdict === true;
+}
+
 
 const KNOWN_FLAGS = new Set([
+    "--allow-empty",
     "--check-canonical",
     "--cleanup-canonical-files",
     "--dry-run",
@@ -872,24 +1122,51 @@ const KNOWN_FLAGS = new Set([
     "--fixall",
     "--help",
     "-h",
+    "--ignore",
     "--json",
+    "--reporter",
     "--suggest-named-theme-vars",
     "--theme-css",
     "--version",
     "-v",
     "--write-canonical-files",
 ]);
-const VALUE_FLAGS = new Set(["--theme-css"]);
+const VALUE_FLAGS = new Set(["--ignore", "--reporter", "--theme-css"]);
+// Flags that accumulate instead of last-one-wins.
+const REPEATABLE_VALUE_FLAGS = new Set(["--ignore"]);
+const REPORTERS = new Set(["text", "json", "sarif"]);
 
 function parseArgs(argv) {
     const flags = new Set();
     const patterns = [];
     const valueFlags = Object.create(null);
+    const repeatedValues = Object.create(null);
     const unknownFlags = [];
     const missingValueFlags = [];
+    let sawSeparator = false;
+
+    const recordValue = (key, value) => {
+        valueFlags[key] = value;
+        if (REPEATABLE_VALUE_FLAGS.has(key)) {
+            (repeatedValues[key] ??= []).push(value);
+        }
+        flags.add(key);
+    };
 
     for (let i = 0; i < argv.length; i += 1) {
         const arg = argv[i];
+
+        // Everything after a bare `--` is a positional target, even if it
+        // starts with a dash. Without this a file literally named `-weird.vue`
+        // was unreachable.
+        if (!sawSeparator && arg === "--") {
+            sawSeparator = true;
+            continue;
+        }
+        if (sawSeparator) {
+            patterns.push(arg);
+            continue;
+        }
 
         if (arg.startsWith("--")) {
             // Support `--key=value` and `--key value` for value-bearing flags.
@@ -900,8 +1177,7 @@ function parseArgs(argv) {
                     unknownFlags.push(key);
                     continue;
                 }
-                valueFlags[key] = arg.slice(eqIdx + 1);
-                flags.add(key);
+                recordValue(key, arg.slice(eqIdx + 1));
                 continue;
             }
 
@@ -912,8 +1188,7 @@ function parseArgs(argv) {
 
             if (VALUE_FLAGS.has(arg)) {
                 if (i + 1 < argv.length && !argv[i + 1].startsWith("-")) {
-                    valueFlags[arg] = argv[i + 1];
-                    flags.add(arg);
+                    recordValue(arg, argv[i + 1]);
                     i += 1;
                 } else {
                     missingValueFlags.push(arg);
@@ -926,7 +1201,7 @@ function parseArgs(argv) {
         }
 
         // Single-dash aliases (-h, -v). Anything else starting with "-" is a
-        // typo'd flag, not a file pattern — surface it instead of silently
+        // typo'd flag, not a file pattern, so surface it instead of silently
         // scanning nothing.
         if (arg.startsWith("-") && arg.length > 1) {
             if (KNOWN_FLAGS.has(arg)) {
@@ -940,7 +1215,13 @@ function parseArgs(argv) {
         patterns.push(arg);
     }
 
+    // --json is the long-standing alias for --reporter json and stays
+    // supported; an explicit --reporter wins when both are given.
+    const requestedReporter = valueFlags["--reporter"] ?? (flags.has("--json") ? "json" : "text");
+    const reporter = REPORTERS.has(requestedReporter) ? requestedReporter : null;
+
     return {
+        allowEmpty: flags.has("--allow-empty"),
         checkCanonical: flags.has("--check-canonical"),
         cleanupCanonicalFiles: flags.has("--cleanup-canonical-files"),
         dryRun: flags.has("--dry-run"),
@@ -948,7 +1229,10 @@ function parseArgs(argv) {
         fix: flags.has("--fix") || flags.has("--fixall"),
         fixAll: flags.has("--fixall"),
         help: flags.has("--help") || flags.has("-h"),
-        json: flags.has("--json"),
+        ignorePatterns: repeatedValues["--ignore"] ?? [],
+        json: reporter === "json",
+        reporter,
+        invalidReporter: reporter === null ? requestedReporter : null,
         suggestNamedThemeVars: flags.has("--suggest-named-theme-vars"),
         themeCssPath: valueFlags["--theme-css"] || null,
         version: flags.has("--version") || flags.has("-v"),
@@ -968,9 +1252,11 @@ Usage:
 Patterns:
   Positional arguments may be file paths, directories, or globs
   (e.g. \`normwinds src\`, \`normwinds "src/**/*.vue"\`, \`normwinds App.tsx\`).
-  With no patterns, the default scan is **/*.{vue,js,mjs,ts,jsx,tsx} from the
-  current directory, skipping .git, node_modules, dist, test-results, cdk.out
-  and other build/scratch folders.
+  With no patterns, the default scan is
+  **/*.{vue,svelte,astro,html,js,mjs,cjs,ts,jsx,tsx,mts,cts} from the current
+  directory, skipping .git, node_modules, dist, coverage, build output and
+  other generated folders. Use \`--\` to end flag parsing when a target starts
+  with a dash.
 
 Exit codes:
   0 no findings   1 findings reported   2 usage or runtime error
@@ -980,7 +1266,15 @@ Flags:
   --fixall                    Auto-fix in all matched files (.vue/.js/.mjs/.ts/.jsx/.tsx)
   --dry-run                   With --fix/--fixall, show which files WOULD be
                               rewritten without writing anything to disk.
-  --json                      Emit findings as JSON
+  --json                      Emit findings as JSON (alias for --reporter json)
+  --reporter <text|json|sarif>
+                              Output format. \`sarif\` emits SARIF 2.1.0 for
+                              GitHub code scanning and similar CI dashboards.
+  --ignore <glob>             Skip paths matching this glob. Repeatable. A
+                              project-local .normwindignore file (one glob per
+                              line, # for comments) is also read automatically.
+  --allow-empty               Exit 0 instead of 2 when the given pattern(s)
+                              match no lintable files.
   --suggest-named-theme-vars  (opt-in, audit only) Emit findings that suggest
                               replacing \`utility-(--var)\` and
                               \`utility-[var(--var)]\` with the named-utility
@@ -1038,82 +1332,12 @@ async function cleanupCanonicalArtifacts() {
     await safeUnlink(CANONICAL_OUTPUT_MD);
 }
 
-function toFixedTrim(value) {
-    const asString = Number(value.toFixed(6)).toString();
-    return asString === "-0" ? "0" : asString;
-}
 
-function parseSingleLength(input) {
-    const normalized = String(input ?? "").trim();
-    const match = normalized.match(/^(-?\d*\.?\d+)(rem|px|em|%)$/i);
-    if (!match) {
-        return null;
-    }
 
-    return {
-        number: Number(match[1]),
-        unit: match[2].toLowerCase(),
-    };
-}
 
-function multiplyLength(lengthValue, factor) {
-    const parsed = parseSingleLength(lengthValue);
-    if (!parsed || Number.isNaN(factor)) {
-        return null;
-    }
 
-    const multiplied = parsed.number * factor;
-    return `${toFixedTrim(multiplied)}${parsed.unit}`;
-}
 
-function remToPx(lengthValue, remPx = ROOT_FONT_SIZE_PX) {
-    const parsed = parseSingleLength(lengthValue);
-    if (!parsed || parsed.unit !== "rem") {
-        return null;
-    }
 
-    return `${toFixedTrim(parsed.number * remPx)}px`;
-}
-
-function pxToRem(lengthValue, remPx = ROOT_FONT_SIZE_PX) {
-    const parsed = parseSingleLength(lengthValue);
-    if (!parsed || parsed.unit !== "px" || remPx === 0) {
-        return null;
-    }
-
-    return `${toFixedTrim(parsed.number / remPx)}rem`;
-}
-
-function expandValueVariants(value) {
-    const variants = new Set([value]);
-
-    const px = remToPx(value);
-    if (px) {
-        variants.add(px);
-    }
-
-    const rem = pxToRem(value);
-    if (rem) {
-        variants.add(rem);
-    }
-
-    return [...variants];
-}
-
-function extractFractionPercent(fraction) {
-    if (!fraction || !fraction.includes("/")) {
-        return null;
-    }
-
-    const [leftRaw, rightRaw] = fraction.split("/");
-    const left = Number(leftRaw);
-    const right = Number(rightRaw);
-    if (!Number.isFinite(left) || !Number.isFinite(right) || right === 0) {
-        return null;
-    }
-
-    return `${toFixedTrim((left / right) * 100)}%`;
-}
 
 function collectCanonicalCandidateValues({ cssRule, parsedCandidate, themeValueMap }) {
     const values = new Set();
@@ -1258,9 +1482,7 @@ async function extractCanonicalReplacements({ writeFiles, checkOnly = false }) {
             // machine. toolVersion is intentionally omitted for the same
             // reason: the snapshot's identity is the Tailwind version plus the
             // replacement set, not the tool release that generated it.
-            tailwindIndexCssPath: path
-                .relative(PACKAGE_ROOT, tailwindIndexCssPath)
-                .replace(/\\/g, "/"),
+            tailwindIndexCssPath: toPortableModulePath(PACKAGE_ROOT, tailwindIndexCssPath),
             rootFontSizePx: ROOT_FONT_SIZE_PX,
         },
         totals: {
@@ -1378,277 +1600,95 @@ function maybePushFinding(found, entry) {
     }
 }
 
-function parseClassToken(raw) {
-    let utilityPart = raw;
-    const importantSuffix = utilityPart.endsWith("!") && utilityPart.length > 1;
-    if (importantSuffix) {
-        utilityPart = utilityPart.slice(0, -1);
-    }
 
-    let importantPrefix = utilityPart.startsWith("!") && utilityPart.length > 1;
-    if (importantPrefix) {
-        utilityPart = utilityPart.slice(1);
-    }
 
-    const lastColon = utilityPart.lastIndexOf(":");
-    const variants = lastColon >= 0 ? utilityPart.slice(0, lastColon + 1) : "";
-    let utility = lastColon >= 0 ? utilityPart.slice(lastColon + 1) : utilityPart;
 
-    if (!importantPrefix && utility.startsWith("!") && utility.length > 1) {
-        importantPrefix = true;
-        utility = utility.slice(1);
-    }
 
-    return {
-        raw,
-        variants,
-        utility,
-        importantPrefix,
-        importantSuffix,
-        important: importantPrefix || importantSuffix,
-    };
-}
 
-const TAILWIND_BAD_CHARS_RAW = /[=><&|?,'"`*]/;
-const TAILWIND_BAD_CHARS_UTIL = /[=><&|?*]/;
-const TAILWIND_UTIL_SHAPE = /^-?[a-z][a-z0-9-]*(?:-[^\s]+)+$/;
 
-function isLikelyTailwindUtility(token) {
-    if (!token || !token.utility) {
-        return false;
-    }
 
-    // Strip arbitrary-value / theme-var bracket contents before the operator
-    // gates, so a bracket-variant utility (e.g. `data-[state=open]:bg-red-500`,
-    // `[&>svg]:size-4`) is not rejected by an `=`/`>`/`&` that only appears
-    // INSIDE the brackets. This mirrors isLikelyFixUtility exactly, so the audit
-    // path and the --fixall path agree on which tokens are Tailwind utilities —
-    // otherwise --fixall would rewrite bracket-variant tokens the audit never
-    // reported.
-    if (
-        TAILWIND_BAD_CHARS_RAW.test(stripBracketedSegments(token.raw)) ||
-        TAILWIND_BAD_CHARS_UTIL.test(stripBracketedSegments(token.utility))
-    ) {
-        return false;
-    }
 
-    if (!token.utility.includes("-")) {
-        return token.utility === "border";
-    }
 
-    return TAILWIND_UTIL_SHAPE.test(token.utility);
-}
 
-function formatClass(variants, important, utility) {
-    return `${variants}${utility}${important ? "!" : ""}`;
-}
-
-function matchUtilityToBody(utility, body) {
-    if (utility === body) {
-        return { negative: "", value: "" };
-    }
-
-    if (utility.startsWith(`${body}-`)) {
-        return { negative: "", value: utility.slice(body.length + 1) };
-    }
-
-    if (utility.startsWith(`-${body}-`)) {
-        return { negative: "-", value: utility.slice(body.length + 2) };
-    }
-
-    return null;
-}
-
-function parseFixToken(raw) {
-    let token = raw;
-    if (token.startsWith("!") && !token.endsWith("!")) {
-        token = `${token.slice(1)}!`;
-    } else if (!token.startsWith("!") && !token.endsWith("!")) {
-        const colonIdx = token.lastIndexOf(":");
-        if (colonIdx >= 0) {
-            const afterColon = token.slice(colonIdx + 1);
-            if (afterColon.startsWith("!") && afterColon.length > 1) {
-                token = `${token.slice(0, colonIdx + 1)}${afterColon.slice(1)}!`;
-            }
-        }
-    }
-
-    const important = token.endsWith("!");
-    const withoutImportant = important ? token.slice(0, -1) : token;
-    const lastColon = withoutImportant.lastIndexOf(":");
-    const variants = lastColon >= 0 ? withoutImportant.slice(0, lastColon + 1) : "";
-    const utility = lastColon >= 0 ? withoutImportant.slice(lastColon + 1) : withoutImportant;
-
-    return {
-        raw: token,
-        variants,
-        utility,
-        important,
-    };
-}
-
-function buildFixToken({ variants, utility, important }) {
-    return `${variants}${utility}${important ? "!" : ""}`;
-}
-
-// Strip the contents of every `[...]` and `(...)` segment so that operator
-// characters which are valid inside Tailwind arbitrary-value or theme-var
-// brackets (e.g. `data-[state=open]`, `[&>svg]`, `(--my-var)`) are not
-// mistaken for JSX/JS expression syntax outside the brackets.
-function stripBracketedSegments(input) {
-    if (typeof input !== "string" || input.length === 0) {
-        return input ?? "";
-    }
-
-    // Depth-aware scan: Tailwind arbitrary values can nest same-kind brackets
-    // (named grid lines, e.g. `grid-cols-[1fr_[full]_1fr]`), which a
-    // non-nesting regex only strips up to the first closer, leaving a stray
-    // `]` behind. An unbalanced opener keeps its remainder verbatim so the
-    // operator gates still see whatever a malformed token contains.
-    let out = "";
-    let depth = 0;
-    let openChar = null;
-    let segmentStart = -1;
-
-    for (let i = 0; i < input.length; i += 1) {
-        const ch = input[i];
-        if (depth === 0) {
-            out += ch;
-            if (ch === "[" || ch === "(") {
-                depth = 1;
-                openChar = ch;
-                segmentStart = i;
-            }
-            continue;
-        }
-
-        if (ch === openChar) {
-            depth += 1;
-        } else if (ch === (openChar === "[" ? "]" : ")")) {
-            depth -= 1;
-            if (depth === 0) {
-                out += ch;
-                openChar = null;
-                segmentStart = -1;
-            }
-        }
-    }
-
-    if (depth > 0 && segmentStart >= 0) {
-        out += input.slice(segmentStart + 1);
-    }
-
-    return out;
-}
-
-function isLikelyFixUtility(raw) {
-    if (!raw) {
-        return false;
-    }
-
-    // Operator characters are only disqualifying when they appear OUTSIDE of
-    // arbitrary-value brackets. Tokens like `data-[state=open]:bg-red-500`,
-    // `[&>svg]:size-4`, or `border-(--color-x)/40` are all legitimate
-    // Tailwind utilities and must not be filtered out here.
-    const stripped = stripBracketedSegments(raw);
-    if (/[=><&|?,'"`*]/.test(stripped)) {
-        return false;
-    }
-
-    const token = parseFixToken(raw);
-    if (!token.utility.includes("-")) {
-        return token.utility === "border";
-    }
-
-    return /^-?[a-z][a-z0-9-]*(?:-[^\s]+)+$/.test(token.utility);
-}
-
-// Shared with the audit-side matchUtilityToBody (same function, no drift). It
-// also matches the bare-body case (`utility === body`, value ""), which is
-// only ever reached with a real bare-valid Tailwind body like `border`
-// (`shorthand: 'all'` in the tailwind group data). mergeFixFamilyShorthand
-// builds its target the way the audit's buildTarget does (no dash when the
-// value is empty), and mergeFixWidthHeight only pairs compound `w-`/`h-`
-// utilities, so the "" case never produces a dangling `-` suffix.
-const matchFixBodyValue = matchUtilityToBody;
-
-// The merge rules detectFamilyShorthand checks, in the order it checks them:
-// axis pairs toward "all", side pairs toward their axis, corner pairs toward
-// their side, then the complete four-sides set toward "all". A rule only
-// applies when the family defines the target shorthand, which is also why the
-// corner rules can never fire outside the border-radius family.
-const FIX_FAMILY_MERGE_RULES = [
-    { sources: ["x", "y"], target: "all" },
-    { sources: ["l", "r"], target: "x" },
-    { sources: ["t", "b"], target: "y" },
-    { sources: ["tl", "tr"], target: "t" },
-    { sources: ["tr", "br"], target: "r" },
-    { sources: ["bl", "br"], target: "b" },
-    { sources: ["tl", "bl"], target: "l" },
-    { sources: ["t", "r", "b", "l"], target: "all" },
-];
 
 // Locate the first family merge the audit would report for the current token
-// list. Tokens are clustered exactly the way detectFamilyShorthand clusters
-// them — per family, per variant prefix + important flag + negative sign +
-// value — and each present shorthand keeps the first token that provides it.
-function findFamilyMerge(tokens) {
-    const { bodyIndex } = getShorthandFamilies();
-    const familyClusters = new Map();
-
-    for (let i = 0; i < tokens.length; i += 1) {
-        const token = parseFixToken(tokens[i]);
-        for (const candidateBody of getUtilityBodyCandidates(token.utility)) {
-            const matches = bodyIndex.get(candidateBody);
-            if (!matches) {
-                continue;
-            }
-
-            const matched = matchFixBodyValue(token.utility, candidateBody);
-            if (!matched) {
-                continue;
-            }
-
-            for (const { family, shorthand } of matches) {
-                if (!familyClusters.has(family)) {
-                    familyClusters.set(family, new Map());
-                }
-
-                const clusters = familyClusters.get(family);
-                const clusterKey = `${token.variants}|${token.important ? "1" : "0"}|${matched.negative}|${matched.value}`;
-                if (!clusters.has(clusterKey)) {
-                    clusters.set(clusterKey, {
-                        negative: matched.negative,
-                        value: matched.value,
-                        shorthandIndices: new Map(),
-                    });
-                }
-
-                const { shorthandIndices } = clusters.get(clusterKey);
-                if (!shorthandIndices.has(shorthand)) {
-                    shorthandIndices.set(shorthand, i);
-                }
-            }
+// list. Tokens are grouped by variant prefix + important flag and then handed
+// to the SAME clusterTokensByFamily the audit uses, so the two paths can never
+// disagree about which merges exist.
+function findFamilyMerge(tokens, mergeSafety = null) {
+    const parsed = tokens.map((raw) => parseFixToken(raw));
+    const groups = new Map();
+    for (let i = 0; i < parsed.length; i += 1) {
+        const groupKey = `${parsed[i].variants}|${parsed[i].important ? "1" : "0"}`;
+        if (!groups.has(groupKey)) {
+            groups.set(groupKey, []);
         }
+        groups.get(groupKey).push(i);
     }
 
-    for (const [family, clusters] of familyClusters.entries()) {
-        for (const { negative, value, shorthandIndices } of clusters.values()) {
-            for (const rule of FIX_FAMILY_MERGE_RULES) {
-                const targetBody = family.shorthandToBody.get(rule.target);
-                if (!targetBody) {
-                    continue;
-                }
+    for (const groupIndices of groups.values()) {
+        const groupRaws = groupIndices.map((index) => tokens[index]);
+        const { familyClusters, familyBodyValues } = clusterTokensByFamily(groupIndices, {
+            getUtility: (index) => parsed[index].utility,
+            getSlot: (index) => index,
+        });
 
-                const indices = rule.sources.map((shorthand) => shorthandIndices.get(shorthand));
-                if (indices.some((index) => index === undefined)) {
-                    continue;
-                }
+        for (const [family, clusters] of familyClusters.entries()) {
+            const bodyValues = familyBodyValues.get(family);
 
-                return {
-                    indices: [...indices].sort((a, b) => a - b),
-                    targetUtility: `${negative}${targetBody}${value ? `-${value}` : ""}`,
-                };
+            for (const [clusterKey, cluster] of clusters.entries()) {
+                const { negative, value, shorthands } = cluster;
+
+                for (const rule of FAMILY_MERGE_RULES) {
+                    if (rule.corners && !family.supportsCorners) {
+                        continue;
+                    }
+                    const targetBody = family.shorthandToBody.get(rule.target);
+                    if (!targetBody) {
+                        continue;
+                    }
+                    // Parity with detectFamilyShorthand: when the target
+                    // shorthand is already present the audit stays silent, so
+                    // the fixer must not rewrite either. Without this the
+                    // fixer collapsed `p-4 px-4 py-4` to `p-4` on a file the
+                    // audit had just declared clean.
+                    if (shorthands.has(rule.target)) {
+                        continue;
+                    }
+
+                    const indices = rule.sources.map((shorthand) => shorthands.get(shorthand));
+                    if (indices.some((index) => index === undefined)) {
+                        continue;
+                    }
+
+                    const ordered = [...indices].sort((a, b) => a - b);
+                    const base = parsed[ordered[0]];
+                    const targetUtility = `${negative}${targetBody}${value ? `-${value}` : ""}`;
+                    const targetRaw = buildFixToken({
+                        variants: base.variants,
+                        utility: targetUtility,
+                        important: base.important,
+                    });
+
+                    const conflict = mergeHasValueConflict(
+                        bodyValues,
+                        family,
+                        rule.sources,
+                        rule.target,
+                        clusterKey,
+                    );
+                    if (!mergeIsRenderSafe(
+                        groupRaws,
+                        ordered.map((index) => tokens[index]),
+                        targetRaw,
+                        conflict,
+                        mergeSafety,
+                    )) {
+                        continue;
+                    }
+
+                    return { indices: ordered, targetUtility };
+                }
             }
         }
     }
@@ -1660,30 +1700,23 @@ function findFamilyMerge(tokens) {
 // reports, one at a time, reclustering after each so a merged token can feed
 // the next rule (rounded-tl + rounded-tr -> rounded-t, border-y + border-x ->
 // border). Every merge removes at least one token, so the loop terminates.
-function mergeFixFamilyShorthand(tokens) {
+function mergeFixFamilyShorthand(tokens, mergeSafety = null) {
     let changed = false;
 
-    for (let merge = findFamilyMerge(tokens); merge; merge = findFamilyMerge(tokens)) {
+    // findFamilyMerge now refuses a rule whose target shorthand already exists
+    // in the same cluster, so the old post-hoc "existingTarget" dedup can no
+    // longer fire and has been removed with it.
+    for (
+        let merge = findFamilyMerge(tokens, mergeSafety);
+        merge;
+        merge = findFamilyMerge(tokens, mergeSafety)
+    ) {
         const { indices, targetUtility } = merge;
         const base = parseFixToken(tokens[indices[0]]);
         const targetRaw = buildFixToken({
             variants: base.variants,
             utility: targetUtility,
             important: base.important,
-        });
-
-        const consumed = new Set(indices);
-        const existingTarget = tokens.some((token, index) => {
-            if (consumed.has(index)) {
-                return false;
-            }
-
-            const parsed = parseFixToken(token);
-            return (
-                parsed.variants === base.variants &&
-                parsed.important === base.important &&
-                parsed.utility === targetUtility
-            );
         });
 
         // Preserve the position of the earliest source token so unrelated
@@ -1693,91 +1726,137 @@ function mergeFixFamilyShorthand(tokens) {
             tokens.splice(indices[k], 1);
         }
 
-        if (existingTarget) {
-            tokens.splice(indices[0], 1);
-        }
-
         changed = true;
     }
 
     return changed;
 }
 
-function mergeFixWidthHeight(tokens) {
-    let changed = false;
+const SIZE_MERGE_BODIES = ["w", "h", "size"];
 
-    // Match a `w-X`/`h-X` pair regardless of authoring order. The previous
-    // implementation only collapsed `w-X h-X`, silently leaving any
-    // `h-X w-X` pair behind because the inner loop scanned forward from the
-    // width index. We now scan every position for the first axis token and
-    // pair it with any matching counterpart anywhere else in the array.
-    for (let i = 0; i < tokens.length; i += 1) {
-        const a = parseFixToken(tokens[i]);
-        const aWidth = matchFixBodyValue(a.utility, "w");
-        const aHeight = matchFixBodyValue(a.utility, "h");
-        const aMatch = aWidth ?? aHeight;
-        if (!aMatch || aMatch.negative) {
+// Index the w-/h-/size- tokens of one variant/important group: the first index
+// per (body, value), and every value seen per body. One linear pass, which is
+// also what removed the old O(n^2)-with-restart scan.
+function indexSizeGroup(parsed, groupIndices) {
+    const firstIndexByBodyValue = new Map();
+    const valuesByBody = new Map();
+
+    for (const index of groupIndices) {
+        for (const body of SIZE_MERGE_BODIES) {
+            const matched = matchFixBodyValue(parsed[index].utility, body);
+            if (!matched || matched.negative || !matched.value) {
+                continue;
+            }
+            const key = `${body}|${matched.value}`;
+            if (!firstIndexByBodyValue.has(key)) {
+                firstIndexByBodyValue.set(key, index);
+            }
+            if (!valuesByBody.has(body)) {
+                valuesByBody.set(body, new Set());
+            }
+            valuesByBody.get(body).add(matched.value);
+        }
+    }
+
+    return { firstIndexByBodyValue, valuesByBody };
+}
+
+// A w-/h- pair only collapses safely when no other w-, h-, or size- token in
+// the same group carries a different value. `w-4 w-6 h-6` used to become
+// `w-4 size-6`, which silently changed the rendered width from 6 to 4 because
+// Tailwind emits size- before w-.
+function sizeMergeHasValueConflict(valuesByBody, value) {
+    for (const body of SIZE_MERGE_BODIES) {
+        const seen = valuesByBody.get(body);
+        if (!seen) {
             continue;
         }
-        const counterpartBody = aWidth ? "h" : "w";
-
-        for (let j = 0; j < tokens.length; j += 1) {
-            if (j === i) {
-                continue;
+        for (const candidate of seen) {
+            if (candidate !== value) {
+                return true;
             }
-            const b = parseFixToken(tokens[j]);
-            const bMatch = matchFixBodyValue(b.utility, counterpartBody);
-            if (!bMatch || bMatch.negative) {
-                continue;
-            }
+        }
+    }
+    return false;
+}
 
-            if (
-                a.variants !== b.variants ||
-                a.important !== b.important ||
-                aMatch.value !== bMatch.value
-            ) {
-                continue;
-            }
+function findWidthHeightMerge(tokens, parsed, groupIndices, mergeSafety) {
+    const { firstIndexByBodyValue, valuesByBody } = indexSizeGroup(parsed, groupIndices);
+    const groupRaws = groupIndices.map((index) => tokens[index]);
 
-            const targetUtility = `size-${aMatch.value}`;
-            const targetRaw = buildFixToken({
-                variants: a.variants,
-                utility: targetUtility,
-                important: a.important,
-            });
+    for (const value of valuesByBody.get("w") ?? []) {
+        const widthIndex = firstIndexByBodyValue.get(`w|${value}`);
+        const heightIndex = firstIndexByBodyValue.get(`h|${value}`);
+        if (widthIndex === undefined || heightIndex === undefined) {
+            continue;
+        }
+        // Audit parity: detectComplexEquivalences stays silent when the target
+        // size- utility is already present, so the fixer must too.
+        if (valuesByBody.get("size")?.has(value)) {
+            continue;
+        }
 
+        const base = parsed[Math.min(widthIndex, heightIndex)];
+        const targetRaw = buildFixToken({
+            variants: base.variants,
+            utility: `size-${value}`,
+            important: base.important,
+        });
+
+        const conflict = sizeMergeHasValueConflict(valuesByBody, value);
+        if (!mergeIsRenderSafe(
+            groupRaws,
+            [tokens[widthIndex], tokens[heightIndex]],
+            targetRaw,
+            conflict,
+            mergeSafety,
+        )) {
+            continue;
+        }
+
+        return {
             // Preserve the position of the earlier token so unrelated
             // utilities keep their relative order in the output.
-            const firstIdx = Math.min(i, j);
-            const secondIdx = Math.max(i, j);
+            firstIndex: Math.min(widthIndex, heightIndex),
+            secondIndex: Math.max(widthIndex, heightIndex),
+            targetRaw,
+        };
+    }
 
-            const existingTarget = tokens.some((token, index) => {
-                if (index === firstIdx || index === secondIdx) {
-                    return false;
-                }
+    return null;
+}
 
-                const parsed = parseFixToken(token);
-                return (
-                    parsed.variants === a.variants &&
-                    parsed.important === a.important &&
-                    parsed.utility === targetUtility
-                );
-            });
+function mergeFixWidthHeight(tokens, mergeSafety = null) {
+    let mutated = false;
 
-            tokens[firstIdx] = targetRaw;
-            tokens.splice(secondIdx, 1);
-
-            if (existingTarget) {
-                tokens.splice(firstIdx, 1);
+    for (let pass = true; pass; ) {
+        pass = false;
+        const parsed = tokens.map((raw) => parseFixToken(raw));
+        const groups = new Map();
+        for (let i = 0; i < parsed.length; i += 1) {
+            const groupKey = `${parsed[i].variants}|${parsed[i].important ? "1" : "0"}`;
+            if (!groups.has(groupKey)) {
+                groups.set(groupKey, []);
             }
+            groups.get(groupKey).push(i);
+        }
 
-            changed = true;
-            i = -1;
+        for (const groupIndices of groups.values()) {
+            const merge = findWidthHeightMerge(tokens, parsed, groupIndices, mergeSafety);
+            if (!merge) {
+                continue;
+            }
+            tokens[merge.firstIndex] = merge.targetRaw;
+            tokens.splice(merge.secondIndex, 1);
+            mutated = true;
+            // Every merge removes a token, so this terminates; indices are
+            // stale after the splice, so recompute rather than patch them.
+            pass = true;
             break;
         }
     }
 
-    return changed;
+    return mutated;
 }
 
 function looksLikeFixableClassString(content, { allowSingleTokenCanonical = false } = {}) {
@@ -1786,7 +1865,7 @@ function looksLikeFixableClassString(content, { allowSingleTokenCanonical = fals
     // brackets (`[...]`) or theme-var parens (`(...)`). A class string
     // containing `data-[state=open]:text-...` or `hover:text-(--color-x)`
     // is still a plain class string and must be considered fixable. The
-    // character set must stay identical to shouldExtractQuotedClassValue's —
+    // character set must stay identical to shouldExtractQuotedClassValue's:
     // the audit and fix paths gate on the same test by design.
     if (/[=><&|?*]/.test(stripBracketedSegments(content))) {
         return false;
@@ -1818,7 +1897,12 @@ function looksLikeFixableClassString(content, { allowSingleTokenCanonical = fals
     return false;
 }
 
-function transformFixableClassContent(content, canonicalizeCandidate, themeVarResolver = null) {
+function transformFixableClassContent(
+    content,
+    canonicalizeCandidate,
+    themeVarResolver = null,
+    mergeSafety = null,
+) {
     const leading = (content.match(/^\s+/) ?? [""])[0];
     const trailing = (content.match(/\s+$/) ?? [""])[0];
     const middle = content.trim();
@@ -1876,8 +1960,9 @@ function transformFixableClassContent(content, canonicalizeCandidate, themeVarRe
     let merged = true;
     while (merged) {
         merged = false;
-        merged = mergeFixFamilyShorthand(tokens) || merged;
-        merged = mergeFixWidthHeight(tokens) || merged;
+        merged = mergeFixFamilyShorthand(tokens, mergeSafety) || merged;
+        merged = mergeFixWidthHeight(tokens, mergeSafety) || merged;
+        merged = mergeFixCompositeEquivalences(tokens, mergeSafety) || merged;
         changed = changed || merged;
     }
 
@@ -1891,18 +1976,19 @@ function transformFixableClassContent(content, canonicalizeCandidate, themeVarRe
 function applyFixesToText(text, canonicalizeCandidate, {
     allowSingleTokenCanonical = false,
     themeVarResolver = null,
+    mergeSafety = null,
     filePath = null,
 } = {}) {
     let changed = false;
     let current = text;
 
-    // The fixer rewrites exactly the spans the audit extracts — nothing else
+    // The fixer rewrites exactly the spans the audit extracts; nothing else
     // in the file is ever touched. Spans can nest (a quoted string inside a
     // :class expression sits inside the attribute-value span), so each pass
     // applies edits right-to-left, preferring the innermost span on overlap;
     // the convergence loop then re-collects spans so a parent-level merge
     // exposed by a nested rewrite still lands. The cap only guards against a
-    // hypothetical rewrite cycle — real inputs settle in one or two passes.
+    // hypothetical rewrite cycle; real inputs settle in one or two passes.
     for (let pass = 0; pass < 10; pass += 1) {
         const spans = extractClassLikeStrings(current, {
             allowSingleTokenCanonical,
@@ -1921,7 +2007,12 @@ function applyFixesToText(text, canonicalizeCandidate, {
                 continue;
             }
 
-            const next = transformFixableClassContent(span.value, canonicalizeCandidate, themeVarResolver);
+            const next = transformFixableClassContent(
+                span.value,
+                canonicalizeCandidate,
+                themeVarResolver,
+                mergeSafety,
+            );
             if (next === span.value) {
                 continue;
             }
@@ -1984,7 +2075,7 @@ async function applyFixes(filePaths, {
     }
 
     for (const filePath of filePaths) {
-        if (!fixAll && !filePath.endsWith(".vue")) {
+        if (!fixAll && !isMarkupFile(filePath)) {
             continue;
         }
 
@@ -2018,7 +2109,7 @@ async function applyFixes(filePaths, {
 
         // Isolate transform + write per file. A transform edge case, or a write
         // error such as EBUSY/EPERM (an editor or antivirus holding the file open
-        // on Windows) or ENOSPC, must skip this one file and continue — not stop
+        // on Windows) or ENOSPC, must skip this one file and continue, not stop
         // the whole run. The write itself stays atomic (temp file + rename).
         try {
             // Test-only hook (mirrors NORMWIND_DISABLE_CANONICAL_SNAPSHOT) that
@@ -2029,7 +2120,7 @@ async function applyFixes(filePaths, {
                 throw new Error("normwinds: forced transform throw (NORMWIND_TEST_FORCE_TRANSFORM_THROW)");
             }
 
-            const allowSingleTokenCanonical = filePath.endsWith(".vue");
+            const allowSingleTokenCanonical = isMarkupFile(filePath);
             const bracketCandidates = collectBracketFixCandidates(
                 sourceText,
                 allowSingleTokenCanonical,
@@ -2057,11 +2148,27 @@ async function applyFixes(filePaths, {
             const themeVarResolver = sharedThemeVarResolver && /\(--|\[var\(--/.test(sourceText)
                 ? sharedThemeVarResolver
                 : null;
-            const { changed, transformed } = applyFixesToText(sourceText, canonicalizeCandidate, {
-                allowSingleTokenCanonical,
-                themeVarResolver,
-                filePath,
-            });
+            // Merge safety is resolved lazily: each attempt answers from the
+            // memo and records the pairs it cannot answer, then those are
+            // resolved and the transform replayed. Merges are iterative, so a
+            // second round can expose a pair the first never reached; loop
+            // until nothing new is recorded. Only a file that actually contains
+            // a conflicting class list pays for the design system, and after
+            // the first such file the memo serves the rest.
+            let changed = false;
+            let transformed = sourceText;
+            for (let round = 0; round < MAX_MERGE_SAFETY_ROUNDS; round += 1) {
+                const probe = createMergeSafetyProbe();
+                ({ changed, transformed } = applyFixesToText(sourceText, canonicalizeCandidate, {
+                    allowSingleTokenCanonical,
+                    themeVarResolver,
+                    mergeSafety: probe,
+                    filePath,
+                }));
+                if (!(await resolvePendingMergeChecks(probe.pending))) {
+                    break;
+                }
+            }
             if (!changed) {
                 continue;
             }
@@ -2075,7 +2182,7 @@ async function applyFixes(filePaths, {
             }
 
             // Write-then-rename so a crash or Ctrl-C mid-write can never leave
-            // the user's source file truncated — the original stays intact until
+            // the user's source file truncated: the original stays intact until
             // the replacement is fully on disk. rename() is atomic on the same
             // volume, which the sibling temp path guarantees.
             const tmpPath = `${filePath}.normwinds-tmp-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
@@ -2120,7 +2227,7 @@ async function applyFixes(filePaths, {
 
     if (failures.length > 0 || skipped.length > 0) {
         console.error(
-            `\nnormwinds: fix summary — ${changedFiles} ${dryRun ? "would-fix" : "fixed"}, ${skipped.length} skipped, ${failures.length} failed`,
+            `\nnormwinds: fix summary: ${changedFiles} ${dryRun ? "would-fix" : "fixed"}, ${skipped.length} skipped, ${failures.length} failed`,
         );
         for (const { filePath, reason } of skipped) {
             console.error(`  - ${filePath} [skipped]: ${reason}`);
@@ -2147,156 +2254,301 @@ function emitSuggestion(found, source, line, column, sources, target) {
     });
 }
 
-function detectComplexEquivalences(groupedTokens, filePath, line, column, found) {
+// Composite equivalences: fixed multi-utility sets that Tailwind ships a
+// single named utility for. Unlike the family merges these have no value axis,
+// so the whole rule is a literal source set and a literal target.
+//
+// One table, consumed by BOTH the audit (detectComplexEquivalences) and the
+// fixer (mergeFixCompositeEquivalences). Before this table existed the audit
+// reported truncate/place-* findings that no fixer could ever apply, so
+// `normwind --fixall && normwind` stayed at exit 1 forever.
+function buildCompositeEquivalenceRules() {
+    const rules = [
+        {
+            target: "truncate",
+            sources: ["overflow-hidden", "text-ellipsis", "whitespace-nowrap"],
+        },
+    ];
+
+    for (const option of COMPLEX_EQUIVALENCES.placeContentOptions) {
+        rules.push({
+            target: `place-content-${option}`,
+            sources: [`content-${option}`, `justify-${option}`],
+        });
+    }
+    for (const option of COMPLEX_EQUIVALENCES.placeItemsOptions) {
+        rules.push({
+            target: `place-items-${option}`,
+            sources: [`items-${option}`, `justify-items-${option}`],
+        });
+    }
+    for (const option of COMPLEX_EQUIVALENCES.placeSelfOptions) {
+        rules.push({
+            target: `place-self-${option}`,
+            sources: [`self-${option}`, `justify-self-${option}`],
+        });
+    }
+
+    for (const rule of rules) {
+        // Any other utility sharing a leading segment with the target or a
+        // source could set one of the same properties, which is the only way
+        // collapsing the set can change what wins.
+        rule.guardedPrefixes = new Set(
+            [rule.target, ...rule.sources].map((utility) => utility.split("-")[0]),
+        );
+        rule.sourceSet = new Set(rule.sources);
+    }
+
+    return rules;
+}
+
+const COMPOSITE_EQUIVALENCE_RULES = buildCompositeEquivalenceRules();
+
+function compositeHasConflict(groupUtilities, rule) {
+    for (const utility of groupUtilities) {
+        if (rule.sourceSet.has(utility) || utility === rule.target) {
+            continue;
+        }
+        if (rule.guardedPrefixes.has(utility.split("-")[0])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function detectComplexEquivalences(groupedTokens, filePath, line, column, found, mergeSafety = null) {
     for (const tokens of groupedTokens.values()) {
         const utilities = new Set(tokens.map((token) => token.utility));
         const byUtility = new Map(tokens.map((token) => [token.utility, token]));
+        const groupRaws = tokens.map((token) => token.raw);
 
-        if (
-            utilities.has("overflow-hidden") &&
-            utilities.has("text-ellipsis") &&
-            utilities.has("whitespace-nowrap") &&
-            !utilities.has("truncate")
-        ) {
-            const target = formatClass(tokens[0].variants, tokens[0].important, "truncate");
-            emitSuggestion(
-                found,
-                filePath,
-                line,
-                column,
-                [
-                    byUtility.get("overflow-hidden"),
-                    byUtility.get("text-ellipsis"),
-                    byUtility.get("whitespace-nowrap"),
-                ].filter(Boolean),
-                target,
-            );
-        }
-
-        // Check every distinct width value rather than only the first w-/h-
-        // tokens. The fixer already searches all pairs, so stopping at the first
-        // conflicting width made an audit-clean file still change under
-        // --fixall (for example: `w-4 w-6 h-6`).
-        const heightsByValue = new Map();
-        for (const token of tokens) {
-            if (token.utility.startsWith("h-") && !heightsByValue.has(token.utility.slice(2))) {
-                heightsByValue.set(token.utility.slice(2), token);
-            }
-        }
-        const emittedSizeValues = new Set();
-        for (const widthToken of tokens) {
-            if (!widthToken.utility.startsWith("w-")) {
+        for (const rule of COMPOSITE_EQUIVALENCE_RULES) {
+            if (utilities.has(rule.target) || !rule.sources.every((source) => utilities.has(source))) {
                 continue;
             }
-            const widthValue = widthToken.utility.slice(2);
-            const heightToken = heightsByValue.get(widthValue);
-            const sizeUtility = `size-${widthValue}`;
-            if (heightToken && !utilities.has(sizeUtility) && !emittedSizeValues.has(widthValue)) {
-                emittedSizeValues.add(widthValue);
-                emitSuggestion(
-                    found,
-                    filePath,
-                    line,
-                    column,
-                    [widthToken, heightToken],
-                    formatClass(widthToken.variants, widthToken.important, sizeUtility),
-                );
+            const sources = rule.sources.map((source) => byUtility.get(source));
+            const target = formatClass(tokens[0].variants, tokens[0].important, rule.target);
+            if (!mergeIsRenderSafe(
+                groupRaws,
+                sources.map((token) => token.raw),
+                target,
+                compositeHasConflict(utilities, rule),
+                mergeSafety,
+            )) {
+                continue;
             }
+            emitSuggestion(found, filePath, line, column, sources, target);
         }
 
-        for (const option of COMPLEX_EQUIVALENCES.placeContentOptions) {
-            const content = byUtility.get(`content-${option}`);
-            const justify = byUtility.get(`justify-${option}`);
-            const targetUtility = `place-content-${option}`;
-            if (content && justify && !utilities.has(targetUtility)) {
-                emitSuggestion(
-                    found,
-                    filePath,
-                    line,
-                    column,
-                    [content, justify],
-                    formatClass(content.variants, content.important, targetUtility),
-                );
-            }
-        }
+        // w-/h- -> size-. Same guard as the fixer's findWidthHeightMerge: the
+        // pair only collapses when no other w-/h-/size- token in the group
+        // carries a different value.
+        const sizeIndices = tokens.map((_, index) => index);
+        const { firstIndexByBodyValue, valuesByBody } = indexSizeGroup(tokens, sizeIndices);
 
-        for (const option of COMPLEX_EQUIVALENCES.placeItemsOptions) {
-            const items = byUtility.get(`items-${option}`);
-            const justifyItems = byUtility.get(`justify-items-${option}`);
-            const targetUtility = `place-items-${option}`;
-            if (items && justifyItems && !utilities.has(targetUtility)) {
-                emitSuggestion(
-                    found,
-                    filePath,
-                    line,
-                    column,
-                    [items, justifyItems],
-                    formatClass(items.variants, items.important, targetUtility),
-                );
+        for (const value of valuesByBody.get("w") ?? []) {
+            const widthIndex = firstIndexByBodyValue.get(`w|${value}`);
+            const heightIndex = firstIndexByBodyValue.get(`h|${value}`);
+            if (widthIndex === undefined || heightIndex === undefined) {
+                continue;
             }
-        }
+            if (valuesByBody.get("size")?.has(value)) {
+                continue;
+            }
 
-        for (const option of COMPLEX_EQUIVALENCES.placeSelfOptions) {
-            const self = byUtility.get(`self-${option}`);
-            const justifySelf = byUtility.get(`justify-self-${option}`);
-            const targetUtility = `place-self-${option}`;
-            if (self && justifySelf && !utilities.has(targetUtility)) {
-                emitSuggestion(
-                    found,
-                    filePath,
-                    line,
-                    column,
-                    [self, justifySelf],
-                    formatClass(self.variants, self.important, targetUtility),
-                );
+            const widthToken = tokens[widthIndex];
+            const heightToken = tokens[heightIndex];
+            const target = formatClass(widthToken.variants, widthToken.important, `size-${value}`);
+            if (!mergeIsRenderSafe(
+                groupRaws,
+                [widthToken.raw, heightToken.raw],
+                target,
+                sizeMergeHasValueConflict(valuesByBody, value),
+                mergeSafety,
+            )) {
+                continue;
             }
+
+            emitSuggestion(found, filePath, line, column, [widthToken, heightToken], target);
         }
     }
 }
 
-function detectFamilyShorthand(groupedTokens, filePath, line, column, found) {
+// Fix-side mirror of the composite table above.
+function mergeFixCompositeEquivalences(tokens, mergeSafety = null) {
+    let mutated = false;
+
+    for (let pass = true; pass; ) {
+        pass = false;
+        const parsed = tokens.map((raw) => parseFixToken(raw));
+        const groups = new Map();
+        for (let i = 0; i < parsed.length; i += 1) {
+            const groupKey = `${parsed[i].variants}|${parsed[i].important ? "1" : "0"}`;
+            if (!groups.has(groupKey)) {
+                groups.set(groupKey, []);
+            }
+            groups.get(groupKey).push(i);
+        }
+
+        for (const groupIndices of groups.values()) {
+            const groupRaws = groupIndices.map((index) => tokens[index]);
+            const utilities = new Set(groupIndices.map((index) => parsed[index].utility));
+            const firstIndexByUtility = new Map();
+            for (const index of groupIndices) {
+                if (!firstIndexByUtility.has(parsed[index].utility)) {
+                    firstIndexByUtility.set(parsed[index].utility, index);
+                }
+            }
+
+            let applied = false;
+            for (const rule of COMPOSITE_EQUIVALENCE_RULES) {
+                if (utilities.has(rule.target) || !rule.sources.every((source) => utilities.has(source))) {
+                    continue;
+                }
+                const indices = rule.sources
+                    .map((source) => firstIndexByUtility.get(source))
+                    .sort((a, b) => a - b);
+                const base = parsed[indices[0]];
+                const targetRaw = buildFixToken({
+                    variants: base.variants,
+                    utility: rule.target,
+                    important: base.important,
+                });
+                if (!mergeIsRenderSafe(
+                    groupRaws,
+                    indices.map((index) => tokens[index]),
+                    targetRaw,
+                    compositeHasConflict(utilities, rule),
+                    mergeSafety,
+                )) {
+                    continue;
+                }
+
+                tokens[indices[0]] = targetRaw;
+                for (let k = indices.length - 1; k >= 1; k -= 1) {
+                    tokens.splice(indices[k], 1);
+                }
+                mutated = true;
+                applied = true;
+                break;
+            }
+
+            if (applied) {
+                // Indices are stale after the splice; recompute. Every merge
+                // removes at least one token, so this terminates.
+                pass = true;
+                break;
+            }
+        }
+    }
+
+    return mutated;
+}
+
+// Cluster one variant/important group's tokens per shorthand family, keyed by
+// negative sign + value. Also records, per family, every value seen for each
+// body, because the merge-safety pre-filter needs the values the value-keyed clusters
+// deliberately keep apart.
+//
+// `getUtility` and `getSlot` let both the audit path (parseClassToken results)
+// and the fix path (positional indices) share this one implementation, so the
+// two can never cluster differently.
+function clusterTokensByFamily(tokens, { getUtility, getSlot }) {
     const { bodyIndex } = getShorthandFamilies();
+    const familyClusters = new Map();
+    const familyBodyValues = new Map();
+    const longestBodyPerToken = new Map();
 
-    for (const tokens of groupedTokens.values()) {
-        const familyClusters = new Map();
+    for (let i = 0; i < tokens.length; i += 1) {
+        const utility = getUtility(tokens[i], i);
+        for (const candidateBody of getUtilityBodyCandidates(utility)) {
+            const matches = bodyIndex.get(candidateBody);
+            if (!matches) {
+                continue;
+            }
 
-        for (const token of tokens) {
-            for (const candidateBody of getUtilityBodyCandidates(token.utility)) {
-                const matches = bodyIndex.get(candidateBody);
-                if (!matches) {
-                    continue;
+            const matched = matchUtilityToBody(utility, candidateBody);
+            if (!matched) {
+                continue;
+            }
+
+            const clusterKey = `${matched.negative}|${matched.value}`;
+            for (const { family, shorthand } of matches) {
+                if (!familyClusters.has(family)) {
+                    familyClusters.set(family, new Map());
+                    familyBodyValues.set(family, new Map());
+                    longestBodyPerToken.set(family, new Map());
                 }
 
-                const matched = matchUtilityToBody(token.utility, candidateBody);
-                if (!matched) {
-                    continue;
+                // getUtilityBodyCandidates also yields every ancestor prefix, so
+                // `gap-x-2` matches body `gap` with the nonsense value "x-2" as
+                // well as body `gap-x` with the real value "2". Only the longest
+                // matching body describes what the token actually is; recording
+                // the ancestors too made every axis merge look like a conflict.
+                const longestByToken = longestBodyPerToken.get(family);
+                const previous = longestByToken.get(i);
+                if (!previous || candidateBody.length > previous.body.length) {
+                    longestByToken.set(i, { body: candidateBody, clusterKey });
                 }
 
-                for (const { family, shorthand } of matches) {
-                    if (!familyClusters.has(family)) {
-                        familyClusters.set(family, new Map());
-                    }
+                const clusters = familyClusters.get(family);
+                if (!clusters.has(clusterKey)) {
+                    clusters.set(clusterKey, {
+                        negative: matched.negative,
+                        value: matched.value,
+                        shorthands: new Map(),
+                    });
+                }
 
-                    const clusters = familyClusters.get(family);
-                    const clusterKey = `${matched.negative}|${matched.value}`;
-                    if (!clusters.has(clusterKey)) {
-                        clusters.set(clusterKey, new Map());
-                    }
-
-                    const shorthandMap = clusters.get(clusterKey);
-                    if (!shorthandMap.has(shorthand)) {
-                        shorthandMap.set(shorthand, []);
-                    }
-
-                    shorthandMap.get(shorthand).push(token);
+                const { shorthands } = clusters.get(clusterKey);
+                if (!shorthands.has(shorthand)) {
+                    shorthands.set(shorthand, getSlot(tokens[i], i));
                 }
             }
         }
+    }
+
+    for (const [family, longestByToken] of longestBodyPerToken.entries()) {
+        const bodyValues = familyBodyValues.get(family);
+        for (const { body, clusterKey } of longestByToken.values()) {
+            if (!bodyValues.has(body)) {
+                bodyValues.set(body, new Set());
+            }
+            bodyValues.get(body).add(clusterKey);
+        }
+    }
+
+    return { familyClusters, familyBodyValues };
+}
+
+// The merge rules the audit reports, in the order it checks them. Shared with
+// the fix path (FIX_FAMILY_MERGE_RULES is this same list) so a rule can never
+// exist on one side only.
+const FAMILY_MERGE_RULES = [
+    { sources: ["x", "y"], target: "all", corners: false },
+    { sources: ["l", "r"], target: "x", corners: false },
+    { sources: ["t", "b"], target: "y", corners: false },
+    { sources: ["tl", "tr"], target: "t", corners: true },
+    { sources: ["tr", "br"], target: "r", corners: true },
+    { sources: ["bl", "br"], target: "b", corners: true },
+    { sources: ["tl", "bl"], target: "l", corners: true },
+    { sources: ["t", "r", "b", "l"], target: "all", corners: false },
+];
+
+function detectFamilyShorthand(groupedTokens, filePath, line, column, found, mergeSafety = null) {
+    for (const tokens of groupedTokens.values()) {
+        const { familyClusters, familyBodyValues } = clusterTokensByFamily(tokens, {
+            getUtility: (token) => token.utility,
+            getSlot: (token) => token,
+        });
+        const groupRaws = tokens.map((token) => token.raw);
 
         for (const [family, clusters] of familyClusters.entries()) {
-            for (const [clusterKey, shorthandMap] of clusters.entries()) {
-                const [negative, value] = clusterKey.split("|");
-                const get = (short) => shorthandMap.get(short)?.[0] ?? null;
+            const bodyValues = familyBodyValues.get(family);
+
+            for (const [clusterKey, cluster] of clusters.entries()) {
+                const { negative, value, shorthands } = cluster;
+                const get = (short) => shorthands.get(short) ?? null;
                 const has = (short) => Boolean(get(short));
 
                 const buildTarget = (short) => {
@@ -2309,130 +2561,46 @@ function detectFamilyShorthand(groupedTokens, filePath, line, column, found) {
                     return formatClass(tokens[0].variants, tokens[0].important, utility);
                 };
 
-                if (has("x") && has("y") && !has("all")) {
-                    const target = buildTarget("all");
-                    if (target) {
-                        emitSuggestion(found, filePath, line, column, [get("x"), get("y")], target);
+                for (const rule of FAMILY_MERGE_RULES) {
+                    if (rule.corners && !family.supportsCorners) {
+                        continue;
                     }
-                }
-
-                if (has("l") && has("r") && !has("x")) {
-                    const target = buildTarget("x");
-                    if (target) {
-                        emitSuggestion(found, filePath, line, column, [get("l"), get("r")], target);
-                    }
-                }
-
-                if (has("t") && has("b") && !has("y")) {
-                    const target = buildTarget("y");
-                    if (target) {
-                        emitSuggestion(found, filePath, line, column, [get("t"), get("b")], target);
-                    }
-                }
-
-                if (family.supportsCorners) {
-                    if (has("tl") && has("tr") && !has("t")) {
-                        const target = buildTarget("t");
-                        if (target) {
-                            emitSuggestion(found, filePath, line, column, [get("tl"), get("tr")], target);
-                        }
+                    if (has(rule.target) || !rule.sources.every(has)) {
+                        continue;
                     }
 
-                    if (has("tr") && has("br") && !has("r")) {
-                        const target = buildTarget("r");
-                        if (target) {
-                            emitSuggestion(found, filePath, line, column, [get("tr"), get("br")], target);
-                        }
+                    const target = buildTarget(rule.target);
+                    if (!target) {
+                        continue;
                     }
 
-                    if (has("bl") && has("br") && !has("b")) {
-                        const target = buildTarget("b");
-                        if (target) {
-                            emitSuggestion(found, filePath, line, column, [get("bl"), get("br")], target);
-                        }
+                    const sources = rule.sources.map(get);
+                    const conflict = mergeHasValueConflict(
+                        bodyValues,
+                        family,
+                        rule.sources,
+                        rule.target,
+                        clusterKey,
+                    );
+                    if (!mergeIsRenderSafe(
+                        groupRaws,
+                        sources.map((token) => token.raw),
+                        target,
+                        conflict,
+                        mergeSafety,
+                    )) {
+                        continue;
                     }
 
-                    if (has("tl") && has("bl") && !has("l")) {
-                        const target = buildTarget("l");
-                        if (target) {
-                            emitSuggestion(found, filePath, line, column, [get("tl"), get("bl")], target);
-                        }
-                    }
-                }
-
-                if (!has("all") && has("t") && has("r") && has("b") && has("l")) {
-                    const target = buildTarget("all");
-                    if (target) {
-                        emitSuggestion(
-                            found,
-                            filePath,
-                            line,
-                            column,
-                            [get("t"), get("r"), get("b"), get("l")],
-                            target,
-                        );
-                    }
+                    emitSuggestion(found, filePath, line, column, sources, target);
                 }
             }
         }
     }
 }
 
-function getUtilityBodyCandidates(utility) {
-    if (UTILITY_BODY_CANDIDATES_CACHE.has(utility)) {
-        return UTILITY_BODY_CANDIDATES_CACHE.get(utility);
-    }
 
-    const normalized = utility.startsWith("-") ? utility.slice(1) : utility;
-    const candidates = [];
-    const seen = new Set();
 
-    const pushCandidate = (value) => {
-        if (value && !seen.has(value)) {
-            seen.add(value);
-            candidates.push(value);
-        }
-    };
-
-    pushCandidate(normalized);
-
-    for (let index = normalized.indexOf("-"); index >= 0; index = normalized.indexOf("-", index + 1)) {
-        pushCandidate(normalized.slice(0, index));
-    }
-
-    UTILITY_BODY_CANDIDATES_CACHE.set(utility, candidates);
-    return candidates;
-}
-
-function buildLineStarts(text) {
-    const starts = [0];
-    let idx = text.indexOf("\n");
-    while (idx !== -1) {
-        starts.push(idx + 1);
-        idx = text.indexOf("\n", idx + 1);
-    }
-    return starts;
-}
-
-function indexToLineCol(lineStarts, index) {
-    let low = 0;
-    let high = lineStarts.length - 1;
-
-    while (low <= high) {
-        const mid = (low + high) >> 1;
-        if (lineStarts[mid] <= index) {
-            low = mid + 1;
-        } else {
-            high = mid - 1;
-        }
-    }
-
-    const lineIndex = Math.max(0, high);
-    return {
-        line: lineIndex + 1,
-        column: index - lineStarts[lineIndex] + 1,
-    };
-}
 
 const QUOTE_VALUE_SHAPE = /\b(?:[a-z]+:)*!?-?[a-z][a-z0-9-]*(?:-[^\s]+)*!?\b/i;
 
@@ -2458,7 +2626,7 @@ function shouldExtractQuotedClassValue(value, { allowSingleTokenCanonical = fals
     }
 
     // Operator characters only disqualify when they appear OUTSIDE Tailwind's
-    // arbitrary-value brackets/parens — `data-[state=open]:x` is a plain
+    // arbitrary-value brackets/parens: `data-[state=open]:x` is a plain
     // class string. This mirrors looksLikeFixableClassString exactly: the
     // audit and fix paths must agree on what counts as a class string, or
     // "audit clean" stops implying "fix is a no-op".
@@ -2469,77 +2637,6 @@ function shouldExtractQuotedClassValue(value, { allowSingleTokenCanonical = fals
     return QUOTE_VALUE_SHAPE.test(value);
 }
 
-// Split a template-literal body into its static text chunks around `${...}`
-// interpolations, so an operator inside an interpolation cannot disqualify
-// (or expose to rewriting) the static class tokens around it. Chunks that
-// butt directly against an interpolation get their partial edge token
-// trimmed — `h-${size}` must never surface a bare `h-` token.
-function splitTemplateStaticChunks(content) {
-    const chunks = [];
-    let chunkStart = 0;
-    let i = 0;
-
-    const pushChunk = (start, end, openEdge, closeEdge) => {
-        let s = start;
-        let e = end;
-        if (openEdge && s < e && !/\s/.test(content[s])) {
-            const ws = content.slice(s, e).search(/\s/);
-            if (ws === -1) {
-                return;
-            }
-            s += ws;
-        }
-        if (closeEdge && s < e && !/\s/.test(content[e - 1])) {
-            const trimmed = content.slice(s, e).replace(/\S+$/, "");
-            e = s + trimmed.length;
-        }
-        if (s < e) {
-            chunks.push({ text: content.slice(s, e), offset: s });
-        }
-    };
-
-    while (i < content.length) {
-        if (content[i] === "\\") {
-            i += 2;
-            continue;
-        }
-        if (content[i] === "$" && content[i + 1] === "{") {
-            pushChunk(chunkStart, i, chunkStart > 0, true);
-            // Skip the interpolation body (depth-aware, quote-aware).
-            let depth = 0;
-            let quote = null;
-            let j = i + 1;
-            for (; j < content.length; j += 1) {
-                const ch = content[j];
-                if (quote) {
-                    if (ch === "\\") {
-                        j += 1;
-                    } else if (ch === quote) {
-                        quote = null;
-                    }
-                    continue;
-                }
-                if (ch === '"' || ch === "'" || ch === "`") {
-                    quote = ch;
-                } else if (ch === "{") {
-                    depth += 1;
-                } else if (ch === "}") {
-                    depth -= 1;
-                    if (depth === 0) {
-                        break;
-                    }
-                }
-            }
-            i = j + 1;
-            chunkStart = i;
-            continue;
-        }
-        i += 1;
-    }
-
-    pushChunk(chunkStart, content.length, chunkStart > 0, false);
-    return chunks;
-}
 
 const NESTED_QUOTE_REGEXES = {
     '"': /"((?:\\.|[^"\\])*)"/g,
@@ -2590,7 +2687,7 @@ function extractNestedQuotedClassStrings(value, baseIndex, options, quoteKinds =
 // Extraction is anchored to class-bearing attributes: `class`, `className`,
 // `:class`, and `v-bind:class` (quoted or JSX-brace values), plus quoted
 // strings nested inside those values (ternaries, object bindings). Blanket
-// scanning of every quoted string in the file — the pre-3.4 behavior — is
+// scanning of every quoted string in the file (the pre-3.4 behavior) is
 // gone: it rewrote unrelated code whose strings merely looked like utility
 // lists (SQL fragments, title attributes, debug labels).
 //
@@ -2607,6 +2704,9 @@ const CLASS_ATTR_BRACE_REGEX = /(?<![\w-])(?:className|class)\s*=\s*\{/g;
 // limits these matches to props objects passed to known render functions.
 const CLASS_OBJECT_KEY_REGEX = /(?<![\w-])(?:className|class)\s*:\s*(["'`])((?:\\.|(?!\1)[^\\])*)\1/g;
 const CLASS_ATTRIBUTE_NAMES = new Set(["class", "className", ":class", "v-bind:class"]);
+// Cheap pre-filter mirroring CLASS_STRING_FUNCTION_NAMES, so a file with no
+// class attribute and no builder call skips parsing entirely.
+const CLASS_BUILDER_HINT = /\b(?:clsx|cva|cx|cn|tv|twMerge|twJoin|classNames|classnames)\s*\(/;
 const RENDER_FUNCTION_NAMES = new Set([
     "h",
     "createElement",
@@ -2622,6 +2722,26 @@ const RENDER_FUNCTION_NAMES = new Set([
     "_jsxs",
     "_jsxDEV",
 ]);
+// Class-string builders. Unlike the render functions above, EVERY string
+// argument these receive is a class list, including strings nested in the
+// variant objects of cva()/tv(). This is where a large share of modern
+// Tailwind lives (shadcn/ui, class-variance-authority, tailwind-variants),
+// and it used to be completely invisible to the scanner.
+const CLASS_STRING_FUNCTION_NAMES = new Set([
+    "classNames",
+    "classnames",
+    "clsx",
+    "cn",
+    "cva",
+    "cx",
+    "tv",
+    "twJoin",
+    "twMerge",
+]);
+// Depth cap for walking a cva()/tv() config object. Real configs nest three
+// or four levels; the cap only stops a pathological input from recursing.
+const MAX_CLASS_ARGUMENT_DEPTH = 8;
+
 function getBabelParser() {
     return bundledBabelParser;
 }
@@ -2676,7 +2796,9 @@ function getObjectPropertyName(property) {
 function analyzeBabelAst(ast, offset = 0) {
     const allowedAttributeStarts = new Set();
     const allowedObjectPropertyStarts = new Set();
+    const classStringSpans = [];
     const renderFunctionNames = new Set(RENDER_FUNCTION_NAMES);
+    const classStringFunctionNames = new Set(CLASS_STRING_FUNCTION_NAMES);
     const aliasPairs = [];
     const callNodes = [];
     const stack = [ast];
@@ -2739,6 +2861,75 @@ function analyzeBabelAst(ast, offset = 0) {
                 renderFunctionNames.add(local);
                 addedAlias = true;
             }
+            if (classStringFunctionNames.has(source) && !classStringFunctionNames.has(local)) {
+                classStringFunctionNames.add(local);
+                addedAlias = true;
+            }
+        }
+    }
+
+    // Record the inner bounds of every string that a class-string builder
+    // receives, following the shapes those APIs actually use: bare strings,
+    // arrays, ternaries, `cond && "..."`, and the nested objects of a cva()
+    // variant map. Values that are not class lists (variant keys such as
+    // "lg") are filtered later by shouldExtractQuotedClassValue.
+    const collectClassStringArguments = (node, depth) => {
+        if (depth > MAX_CLASS_ARGUMENT_DEPTH) {
+            return;
+        }
+        const unwrapped = unwrapExpression(node);
+        if (!unwrapped || typeof unwrapped !== "object") {
+            return;
+        }
+
+        if (unwrapped.type === "StringLiteral" && Number.isInteger(unwrapped.start)) {
+            classStringSpans.push({
+                start: offset + unwrapped.start + 1,
+                end: offset + unwrapped.end - 1,
+            });
+            return;
+        }
+        if (unwrapped.type === "TemplateLiteral") {
+            // Only a template with no interpolation is a literal class list;
+            // splitTemplateStaticChunks already handles the interpolated form
+            // wherever a class attribute contains one.
+            if (unwrapped.expressions.length === 0 && unwrapped.quasis.length === 1) {
+                const quasi = unwrapped.quasis[0];
+                classStringSpans.push({ start: offset + quasi.start, end: offset + quasi.end });
+            }
+            return;
+        }
+        if (unwrapped.type === "ArrayExpression") {
+            for (const element of unwrapped.elements) {
+                collectClassStringArguments(element, depth + 1);
+            }
+            return;
+        }
+        if (unwrapped.type === "ObjectExpression") {
+            for (const property of unwrapped.properties) {
+                if (property?.type === "ObjectProperty") {
+                    collectClassStringArguments(property.value, depth + 1);
+                }
+            }
+            return;
+        }
+        if (unwrapped.type === "ConditionalExpression") {
+            collectClassStringArguments(unwrapped.consequent, depth + 1);
+            collectClassStringArguments(unwrapped.alternate, depth + 1);
+            return;
+        }
+        if (unwrapped.type === "LogicalExpression") {
+            collectClassStringArguments(unwrapped.right, depth + 1);
+        }
+    };
+
+    for (const call of callNodes) {
+        const calleeName = getCalledFunctionName(call.callee);
+        if (!calleeName || !classStringFunctionNames.has(calleeName)) {
+            continue;
+        }
+        for (const argument of call.arguments) {
+            collectClassStringArguments(argument, 0);
         }
     }
 
@@ -2767,7 +2958,7 @@ function analyzeBabelAst(ast, offset = 0) {
         }
     }
 
-    return { allowedAttributeStarts, allowedObjectPropertyStarts };
+    return { allowedAttributeStarts, allowedObjectPropertyStarts, classStringSpans };
 }
 
 function parserPluginVariants({ typescript, jsx }) {
@@ -2831,138 +3022,17 @@ function parseAndAnalyzeJavaScript(
     throw new Error(`could not safely parse ${filePath}: ${detail}`);
 }
 
-function findMarkupTagEnd(sourceText, openIndex) {
-    let quote = null;
-    for (let i = openIndex + 1; i < sourceText.length; i += 1) {
-        const ch = sourceText[i];
-        if (quote) {
-            if (ch === quote) {
-                quote = null;
-            }
-            continue;
-        }
-        if (ch === '"' || ch === "'") {
-            quote = ch;
-        } else if (ch === ">") {
-            return i;
-        }
-    }
-    return -1;
-}
 
-function parseMarkupTag(sourceText, openIndex) {
-    const end = findMarkupTagEnd(sourceText, openIndex);
-    if (end === -1) {
-        return null;
-    }
 
-    let cursor = openIndex + 1;
-    while (cursor < end && /\s/.test(sourceText[cursor])) {
-        cursor += 1;
-    }
-    const closing = sourceText[cursor] === "/";
-    if (closing) {
-        cursor += 1;
-        while (cursor < end && /\s/.test(sourceText[cursor])) {
-            cursor += 1;
-        }
-    }
-    const nameStart = cursor;
-    while (cursor < end && !/[\s/>]/.test(sourceText[cursor])) {
-        cursor += 1;
-    }
-    const name = sourceText.slice(nameStart, cursor);
-    if (!name || name.startsWith("!") || name.startsWith("?")) {
-        return { end, closing, name: "", selfClosing: false, attributes: [] };
-    }
-    if (closing) {
-        return {
-            end,
-            closing: true,
-            name,
-            selfClosing: false,
-            attributes: [],
-        };
-    }
 
-    const attributes = [];
-    while (cursor < end) {
-        while (cursor < end && /\s/.test(sourceText[cursor])) {
-            cursor += 1;
-        }
-        if (cursor >= end || sourceText[cursor] === "/") {
-            break;
-        }
-
-        const start = cursor;
-        while (cursor < end && !/[\s=/>]/.test(sourceText[cursor])) {
-            cursor += 1;
-        }
-        const attributeName = sourceText.slice(start, cursor);
-        while (cursor < end && /\s/.test(sourceText[cursor])) {
-            cursor += 1;
-        }
-
-        let value = null;
-        if (sourceText[cursor] === "=") {
-            cursor += 1;
-            while (cursor < end && /\s/.test(sourceText[cursor])) {
-                cursor += 1;
-            }
-            const quote = sourceText[cursor];
-            if (quote === '"' || quote === "'") {
-                const valueStart = cursor + 1;
-                cursor = valueStart;
-                while (cursor < end && sourceText[cursor] !== quote) {
-                    cursor += 1;
-                }
-                value = sourceText.slice(valueStart, cursor);
-                cursor += cursor < end ? 1 : 0;
-            } else if (sourceText[cursor] === "{") {
-                const braceEnd = findBalancedBraceEnd(sourceText, cursor);
-                cursor = braceEnd !== -1 && braceEnd <= end ? braceEnd + 1 : end;
-            } else {
-                const valueStart = cursor;
-                while (cursor < end && !/[\s>]/.test(sourceText[cursor])) {
-                    cursor += 1;
-                }
-                value = sourceText.slice(valueStart, cursor);
-            }
-        }
-        if (attributeName) {
-            attributes.push({ name: attributeName, start, value });
-        } else {
-            cursor += 1;
-        }
-    }
-
-    let slashCursor = end - 1;
-    while (slashCursor > openIndex && /\s/.test(sourceText[slashCursor])) {
-        slashCursor -= 1;
-    }
-    return {
-        end,
-        closing: false,
-        name,
-        selfClosing: sourceText[slashCursor] === "/",
-        attributes,
-    };
-}
-
-function findRawElementClose(sourceText, tagName, fromIndex) {
-    const closeRegex = new RegExp(`</${tagName}\\s*>`, "gi");
-    closeRegex.lastIndex = fromIndex;
-    const match = closeRegex.exec(sourceText);
-    if (!match) {
-        return null;
-    }
-    return { start: match.index, end: match.index + match[0].length };
-}
-
-function analyzeVueStructure(sourceText) {
+// `requireTemplate` is the Vue SFC rule: class attributes only count inside a
+// <template>. Svelte, Astro and plain HTML have no such wrapper, so their
+// markup is scanned at top level instead, with <script>/<style> bodies still
+// skipped as raw regions.
+function analyzeMarkupStructure(sourceText, { requireTemplate = true } = {}) {
     const allowedAttributeStarts = new Set();
     const scriptBlocks = [];
-    let templateDepth = 0;
+    let templateDepth = requireTemplate ? 0 : 1;
     let cursor = 0;
 
     while (cursor < sourceText.length) {
@@ -2995,14 +3065,14 @@ function analyzeVueStructure(sourceText) {
         const lowerName = tag.name.toLowerCase();
 
         if (tag.closing) {
-            if (lowerName === "template" && templateDepth > 0) {
+            if (requireTemplate && lowerName === "template" && templateDepth > 0) {
                 templateDepth -= 1;
             }
             cursor = tag.end + 1;
             continue;
         }
 
-        if (templateDepth > 0 && lowerName !== "template") {
+        if (templateDepth > 0 && !(requireTemplate && lowerName === "template")) {
             for (const attribute of tag.attributes) {
                 if (CLASS_ATTRIBUTE_NAMES.has(attribute.name)) {
                     allowedAttributeStarts.add(attribute.start);
@@ -3010,23 +3080,30 @@ function analyzeVueStructure(sourceText) {
             }
         }
 
-        if (lowerName === "template" && !tag.selfClosing) {
+        if (requireTemplate && lowerName === "template" && !tag.selfClosing) {
             templateDepth += 1;
             cursor = tag.end + 1;
             continue;
         }
 
-        if (templateDepth === 0 && (lowerName === "script" || lowerName === "style")) {
+        if (lowerName === "script" || lowerName === "style") {
             const close = findRawElementClose(sourceText, lowerName, tag.end + 1);
             if (!close) {
                 cursor = sourceText.length;
                 continue;
             }
             if (lowerName === "script") {
-                const lang = tag.attributes
-                    .find((attribute) => attribute.name.toLowerCase() === "lang")
-                    ?.value
-                    ?.toLowerCase() ?? "js";
+                const langAttribute = tag.attributes.find(
+                    (attribute) => attribute.name.toLowerCase() === "lang",
+                );
+                const typeAttribute = tag.attributes.find(
+                    (attribute) => attribute.name.toLowerCase() === "type",
+                );
+                // Svelte/Astro spell it `lang="ts"`; plain HTML uses
+                // type="module" or nothing at all.
+                const lang = langAttribute?.value?.toLowerCase()
+                    ?? (typeAttribute?.value?.toLowerCase() === "module" ? "js" : null)
+                    ?? "js";
                 scriptBlocks.push({
                     source: sourceText.slice(tag.end + 1, close.start),
                     offset: tag.end + 1,
@@ -3040,7 +3117,7 @@ function analyzeVueStructure(sourceText) {
         // Unknown top-level SFC custom blocks are not Vue templates. Skip
         // their raw contents so embedded markup/data cannot be mistaken for
         // renderable class attributes.
-        if (templateDepth === 0 && lowerName && !tag.selfClosing) {
+        if (requireTemplate && templateDepth === 0 && lowerName && !tag.selfClosing) {
             const close = findRawElementClose(sourceText, lowerName, tag.end + 1);
             cursor = close ? close.end : tag.end + 1;
             continue;
@@ -3059,90 +3136,124 @@ function mergeSyntaxAnalysis(target, source) {
     for (const start of source.allowedObjectPropertyStarts) {
         target.allowedObjectPropertyStarts.add(start);
     }
+    for (const span of source.classStringSpans ?? []) {
+        target.classStringSpans.push(span);
+    }
+}
+
+// The structural Babel/Vue analysis is the single most expensive step per
+// file, and the fix path used to redo it for the very same text: once in
+// collectBracketFixCandidates and again on the first applyFixesToText pass.
+// Cache the last analysis per file path and reuse it whenever the text is
+// byte-identical. Offsets shift as soon as a rewrite lands, so a changed pass
+// still re-analyzes; this only removes the provably redundant repeats.
+const SYNTAX_ANALYSIS_CACHE = new Map();
+const MAX_SYNTAX_ANALYSIS_CACHE_ENTRIES = 64;
+
+function analyzeClassSyntaxCached(sourceText, filePath) {
+    const key = filePath ?? "";
+    const cached = SYNTAX_ANALYSIS_CACHE.get(key);
+    if (cached && cached.sourceText === sourceText) {
+        return cached.analysis;
+    }
+
+    const analysis = analyzeClassSyntax(sourceText, filePath);
+    if (SYNTAX_ANALYSIS_CACHE.size >= MAX_SYNTAX_ANALYSIS_CACHE_ENTRIES) {
+        // Plain FIFO eviction; the access pattern is "same file several times
+        // in a row", so recency beyond one entry per path buys nothing.
+        SYNTAX_ANALYSIS_CACHE.delete(SYNTAX_ANALYSIS_CACHE.keys().next().value);
+    }
+    SYNTAX_ANALYSIS_CACHE.set(key, { sourceText, analysis });
+    return analysis;
 }
 
 function analyzeClassSyntax(sourceText, filePath) {
     const analysis = {
         allowedAttributeStarts: new Set(),
         allowedObjectPropertyStarts: new Set(),
+        classStringSpans: [],
     };
     const normalizedPath = String(filePath ?? "source.js").toLowerCase();
     const extension = path.extname(normalizedPath);
 
-    if (extension === ".vue") {
-        const vue = analyzeVueStructure(sourceText);
-        for (const start of vue.allowedAttributeStarts) {
+    if (MARKUP_EXTENSIONS.has(extension)) {
+        // Astro frontmatter is a leading `---` fenced TypeScript block. It is
+        // not markup, so hand it to the JS analyzer and scan only what follows
+        // as markup.
+        let markupSource = sourceText;
+        let markupOffset = 0;
+        if (extension === ".astro") {
+            const frontmatter = /^\s*---\r?\n([\s\S]*?)\r?\n---[ \t]*\r?\n?/.exec(sourceText);
+            if (frontmatter) {
+                markupOffset = frontmatter[0].length;
+                markupSource = " ".repeat(markupOffset) + sourceText.slice(markupOffset);
+            }
+        }
+
+        const markup = analyzeMarkupStructure(markupSource, {
+            requireTemplate: extension === ".vue",
+        });
+        for (const start of markup.allowedAttributeStarts) {
             analysis.allowedAttributeStarts.add(start);
         }
-        for (const block of vue.scriptBlocks) {
+        for (const block of markup.scriptBlocks) {
             const isTypeScript = ["ts", "tsx", "mts", "cts"].includes(block.lang);
             const isJavaScript = ["js", "jsx", "mjs", "cjs", "babel"].includes(block.lang);
             if (!isTypeScript && !isJavaScript) {
                 continue;
             }
-            const scriptAnalysis = parseAndAnalyzeJavaScript(
-                block.source,
-                `${filePath ?? "source.vue"}?script=${block.lang}`,
-                {
-                    typescript: isTypeScript,
-                    jsx: block.lang === "tsx" || block.lang === "jsx" || isJavaScript,
-                    offset: block.offset,
-                },
-            );
+            let scriptAnalysis;
+            try {
+                scriptAnalysis = parseAndAnalyzeJavaScript(
+                    block.source,
+                    `${filePath ?? "source"}?script=${block.lang}`,
+                    {
+                        typescript: isTypeScript,
+                        jsx: block.lang === "tsx" || block.lang === "jsx" || isJavaScript,
+                        offset: block.offset,
+                    },
+                );
+            } catch (error) {
+                // Svelte and Astro scripts use framework-specific syntax
+                // (`$:` labels are valid JS, but `{#if}` blocks in Astro's
+                // frontmatter are not). A script we cannot parse means no
+                // render-function props are recognized in it; the markup
+                // attributes above are still perfectly usable, so degrade
+                // rather than failing the whole file. Vue SFCs keep the strict
+                // behavior because their script block is plain JS/TS.
+                if (extension === ".vue") {
+                    throw error;
+                }
+                continue;
+            }
             mergeSyntaxAnalysis(analysis, scriptAnalysis);
         }
         return analysis;
     }
 
-    const isTypeScript = extension === ".ts" || extension === ".tsx";
+    const isTypeScript = extension === ".ts" || extension === ".tsx"
+        || extension === ".mts" || extension === ".cts";
     return parseAndAnalyzeJavaScript(sourceText, filePath ?? "source.js", {
         typescript: isTypeScript,
         jsx: extension === ".jsx" || extension === ".tsx" || !isTypeScript,
     });
 }
 
-// Find the index of the `}` matching the `{` at openIndex, respecting quoted
-// strings inside the expression. Returns -1 when unbalanced.
-function findBalancedBraceEnd(text, openIndex) {
-    let depth = 0;
-    let quote = null;
-    for (let i = openIndex; i < text.length; i += 1) {
-        const ch = text[i];
-        if (quote) {
-            if (ch === "\\") {
-                i += 1;
-            } else if (ch === quote) {
-                quote = null;
-            }
-            continue;
-        }
-        if (ch === '"' || ch === "'" || ch === "`") {
-            quote = ch;
-            continue;
-        }
-        if (ch === "{") {
-            depth += 1;
-        } else if (ch === "}") {
-            depth -= 1;
-            if (depth === 0) {
-                return i;
-            }
-        }
-    }
-    return -1;
-}
 
 function extractClassLikeStrings(
     sourceText,
     { allowSingleTokenCanonical = false, filePath = null } = {},
 ) {
-    if (!sourceText.includes("class")) {
+    // A class-string builder call (clsx/cva/tv/cn) does not have to contain the
+    // substring "class", so the cheap bail-out has to look for those too.
+    if (!sourceText.includes("class") && !CLASS_BUILDER_HINT.test(sourceText)) {
         return [];
     }
     const {
         allowedAttributeStarts,
         allowedObjectPropertyStarts,
-    } = analyzeClassSyntax(sourceText, filePath);
+        classStringSpans,
+    } = analyzeClassSyntaxCached(sourceText, filePath);
     const results = [];
     const seen = new Set();
     const push = (value, index) => {
@@ -3162,7 +3273,7 @@ function extractClassLikeStrings(
         }
         const value = match[2];
         // The value sits immediately before the closing quote, so compute its
-        // start positionally — indexOf would hit an earlier occurrence for
+        // start positionally, because indexOf would hit an earlier occurrence for
         // values like class="class".
         const startIndex = match.index + match[0].length - 1 - value.length;
         push(value, startIndex);
@@ -3223,6 +3334,16 @@ function extractClassLikeStrings(
         }
     }
 
+    for (const span of classStringSpans ?? []) {
+        if (!Number.isInteger(span.start) || !Number.isInteger(span.end) || span.end <= span.start) {
+            continue;
+        }
+        const value = sourceText.slice(span.start, span.end);
+        if (shouldExtractQuotedClassValue(value, { allowSingleTokenCanonical })) {
+            push(value, span.start);
+        }
+    }
+
     results.sort((a, b) => a.index - b.index);
     return results;
 }
@@ -3247,9 +3368,6 @@ function collectArbitraryValueTokens(snippetValue, snippetIndex, lineStarts) {
     return found;
 }
 
-function hasGlobSyntax(value) {
-    return /[*?[\]{}]/.test(value);
-}
 
 function validateActionPattern(pattern) {
     if (!ACTION_WORKSPACE_ROOT) {
@@ -3268,11 +3386,59 @@ function validateActionPattern(pattern) {
 }
 
 function hasAllowedExtension(filePath) {
-    return /\.(?:vue|js|mjs|ts|jsx|tsx)$/i.test(filePath);
+    return /\.(?:vue|svelte|astro|html|htm|js|mjs|cjs|ts|jsx|tsx|mts|cts)$/i.test(filePath);
+}
+
+function isMarkupFile(filePath) {
+    return MARKUP_EXTENSIONS.has(path.extname(String(filePath ?? "")).toLowerCase());
 }
 
 function normalizeRelativePath(filePath) {
     return path.relative(process.cwd(), path.resolve(process.cwd(), filePath)).replace(/\\/g, "/");
+}
+
+const IGNORE_FILE_NAME = ".normwindignore";
+
+// Extra ignore globs from --ignore and .normwindignore, compiled once.
+let extraIgnoreMatchers = [];
+let extraIgnoreGlobs = [];
+
+function toIgnoreMatcher(pattern) {
+    const trimmed = pattern.trim().replace(/\\/g, "/").replace(/^\.\//, "");
+    if (!trimmed) {
+        return null;
+    }
+    // A bare directory name means "everything under it", the way .gitignore
+    // and every other ignore file people have used behaves.
+    const expanded = hasGlobSyntax(trimmed)
+        ? trimmed
+        : `${trimmed.replace(/\/+$/, "")}/**`;
+    return { glob: expanded, regex: globPatternToRegExp(expanded), bare: trimmed.replace(/\/+$/, "") };
+}
+
+async function loadIgnoreConfig(cliPatterns) {
+    const patterns = [...cliPatterns];
+
+    // The ignore FILE is checkout-controlled, so it is deliberately not read in
+    // Action mode: a pull request could otherwise silence the audit on exactly
+    // the files it changed. Explicit --ignore flags come from the workflow
+    // author and are always honored.
+    if (!ACTION_WORKSPACE_ROOT) {
+        try {
+            const raw = await fs.readFile(path.resolve(process.cwd(), IGNORE_FILE_NAME), "utf8");
+            for (const line of raw.split(/\r?\n/)) {
+                const value = line.trim();
+                if (value && !value.startsWith("#")) {
+                    patterns.push(value);
+                }
+            }
+        } catch {
+            // No ignore file is the normal case.
+        }
+    }
+
+    extraIgnoreMatchers = patterns.map(toIgnoreMatcher).filter(Boolean);
+    extraIgnoreGlobs = extraIgnoreMatchers.map((matcher) => `!${matcher.glob}`);
 }
 
 function isIgnoredRelativePath(relativePath) {
@@ -3290,7 +3456,17 @@ function isIgnoredRelativePath(relativePath) {
     }
 
     const segments = normalized.split("/");
-    return segments.some((segment) => IGNORED_SEGMENTS.has(segment));
+    if (segments.some((segment) => IGNORED_SEGMENTS.has(segment))) {
+        return true;
+    }
+
+    for (const matcher of extraIgnoreMatchers) {
+        if (matcher.regex.test(normalized) || normalized === matcher.bare) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 async function listFilesWithRipgrep(patterns) {
@@ -3300,7 +3476,7 @@ async function listFilesWithRipgrep(patterns) {
         throw error;
     }
     const args = ["--files", "--hidden"];
-    for (const glob of RG_IGNORE_GLOBS) {
+    for (const glob of [...RG_IGNORE_GLOBS, ...extraIgnoreGlobs]) {
         args.push("-g", glob);
     }
     for (const pattern of patterns) {
@@ -3316,7 +3492,7 @@ async function listFilesWithRipgrep(patterns) {
             windowsHide: true,
         }));
     } catch (error) {
-        // rg exit code 1 means "ran fine, nothing matched" — that is a valid
+        // rg exit code 1 means "ran fine, nothing matched", which is a valid
         // empty result, NOT a reason to fall back to walking the whole tree
         // (which would silently scan everything a typo'd pattern never asked
         // for). Only spawn failures / real errors propagate to the fallback.
@@ -3332,51 +3508,6 @@ async function listFilesWithRipgrep(patterns) {
         .map((filePath) => path.resolve(process.cwd(), filePath));
 }
 
-// Minimal glob-to-RegExp conversion covering the syntax the CLI documents
-// (`**`, `*`, `?`, `{a,b}`), so the no-ripgrep fallback honors the same
-// patterns instead of returning every file in the tree.
-function globPatternToRegExp(pattern) {
-    const normalized = pattern.replace(/\\/g, "/").replace(/^\.\//, "");
-    let out = "";
-    for (let i = 0; i < normalized.length; i += 1) {
-        const ch = normalized[i];
-        if (ch === "*") {
-            if (normalized[i + 1] === "*") {
-                if (normalized[i + 2] === "/") {
-                    out += "(?:[^/]+/)*";
-                    i += 2;
-                } else {
-                    out += ".*";
-                    i += 1;
-                }
-            } else {
-                out += "[^/]*";
-            }
-        } else if (ch === "?") {
-            out += "[^/]";
-        } else if (ch === "{") {
-            const close = normalized.indexOf("}", i);
-            if (close === -1) {
-                out += "\\{";
-                continue;
-            }
-            const alts = normalized
-                .slice(i + 1, close)
-                .split(",")
-                .map((alt) => alt.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-            out += `(?:${alts.join("|")})`;
-            i = close;
-        } else {
-            out += ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        }
-    }
-
-    // Like ripgrep: a pattern containing "/" anchors at the tree root; a bare
-    // pattern matches against the basename at any depth.
-    return normalized.includes("/")
-        ? new RegExp(`^${out}$`)
-        : new RegExp(`(?:^|/)${out}$`);
-}
 
 // visitedRealPaths guards against symlink loops: a directory symlink cycle
 // (A/link -> B, B/link -> A) would otherwise recurse forever, since a plain
@@ -3439,7 +3570,12 @@ async function listTargetFiles(patterns) {
     for (const pattern of targetPatterns) {
         validateActionPattern(pattern);
         if (hasGlobSyntax(pattern)) {
-            globPatterns.push(pattern);
+            // ripgrep treats a backslash as an escape character, not a path
+            // separator, while the fallback walker's globPatternToRegExp
+            // normalized it. `normwind "src\**\*.vue"` therefore matched a
+            // different set depending on whether rg happened to be installed.
+            // Normalize once, here, so both consumers see the same string.
+            globPatterns.push(pattern.replace(/\\/g, "/"));
             continue;
         }
 
@@ -3628,7 +3764,7 @@ async function collectStaticShorthandFindings(filePaths, { suggestNamedThemeVars
         let snippets;
         try {
             snippets = extractClassLikeStrings(sourceText, {
-                allowSingleTokenCanonical: filePath.endsWith(".vue"),
+                allowSingleTokenCanonical: isMarkupFile(filePath),
                 filePath,
             });
         } catch (error) {
@@ -3697,7 +3833,7 @@ async function collectStaticShorthandFindings(filePaths, { suggestNamedThemeVars
     });
 
     // Determine which arbitrary tokens are NOT already cached. Only load
-    // Tailwind if there are misses — a warm cache bypasses the ~1.4s
+    // Tailwind if there are misses; a warm cache bypasses the ~1.4s
     // design-system initialization entirely.
     const cacheMisses = [];
     for (const raw of uniqueArbitraryRaws) {
@@ -3739,7 +3875,14 @@ async function collectStaticShorthandFindings(filePaths, { suggestNamedThemeVars
 
     // Pass 2: per-file scanning. Canonicalize lookups now hit the pre-warmed
     // memo, so no further design-system work happens in the hot loop.
-    const perFileFindings = await runWithConcurrency(fileContexts, FILE_SCAN_CONCURRENCY, async (ctx) => {
+    //
+    // Merge safety is resolved the same lazy way: the first sweep answers from
+    // the memo and records every pair it could not answer. Only if something
+    // was recorded is Tailwind loaded, the pending pairs resolved, and the
+    // sweep replayed against a now-complete memo. A class list with no
+    // conflicting sibling never reaches that path, so the warm-cache run still
+    // never touches the design system.
+    const runDetectionSweep = (mergeSafety) => runWithConcurrency(fileContexts, FILE_SCAN_CONCURRENCY, async (ctx) => {
         if (!ctx) {
             return [];
         }
@@ -3861,13 +4004,36 @@ async function collectStaticShorthandFindings(filePaths, { suggestNamedThemeVars
 
                 const ls = ensureLineStarts();
                 const snippetAnchor = indexToLineCol(ls, snippet.index);
-                detectFamilyShorthand(grouped, relativePath, snippetAnchor.line, snippetAnchor.column, localFound);
-                detectComplexEquivalences(grouped, relativePath, snippetAnchor.line, snippetAnchor.column, localFound);
+                detectFamilyShorthand(
+                    grouped,
+                    relativePath,
+                    snippetAnchor.line,
+                    snippetAnchor.column,
+                    localFound,
+                    mergeSafety,
+                );
+                detectComplexEquivalences(
+                    grouped,
+                    relativePath,
+                    snippetAnchor.line,
+                    snippetAnchor.column,
+                    localFound,
+                    mergeSafety,
+                );
             }
         }
 
         return [...localFound.values()];
     });
+
+    let perFileFindings = [];
+    for (let round = 0; round < MAX_MERGE_SAFETY_ROUNDS; round += 1) {
+        const probe = createMergeSafetyProbe();
+        perFileFindings = await runDetectionSweep(probe);
+        if (!(await resolvePendingMergeChecks(probe.pending))) {
+            break;
+        }
+    }
 
     const findings = perFileFindings.flat().sort(
         (a, b) =>
@@ -3889,7 +4055,7 @@ function printScanIssueSummary(skipped, failures) {
         return;
     }
     console.error(
-        `\nnormwinds: audit summary — ${skipped.length} skipped, ${failures.length} failed`,
+        `\nnormwinds: audit summary: ${skipped.length} skipped, ${failures.length} failed`,
     );
     for (const { filePath, reason } of skipped) {
         console.error(`  - ${filePath} [skipped]: ${reason}`);
@@ -3898,6 +4064,7 @@ function printScanIssueSummary(skipped, failures) {
         console.error(`  - ${filePath} [failed:${stage}]: ${error?.message || String(error)}`);
     }
 }
+
 
 function printTextReport(findings, lintedFiles) {
     if (findings.length === 0) {
@@ -3924,6 +4091,7 @@ function printTextReport(findings, lintedFiles) {
 
 async function main() {
     const {
+        allowEmpty,
         checkCanonical,
         cleanupCanonicalFiles,
         dryRun,
@@ -3931,8 +4099,10 @@ async function main() {
         fix,
         fixAll,
         help,
-        json,
+        ignorePatterns,
+        invalidReporter,
         patterns,
+        reporter,
         suggestNamedThemeVars,
         themeCssPath,
         version,
@@ -3966,10 +4136,34 @@ async function main() {
         return;
     }
 
+    if (invalidReporter !== null) {
+        console.error(
+            `normwinds: unknown --reporter "${invalidReporter}". Supported: text, json, sarif.`,
+        );
+        process.exitCode = 2;
+        return;
+    }
+
     if (suggestNamedThemeVars && !themeCssPath) {
         console.error(
             "normwinds: --suggest-named-theme-vars requires --theme-css <path-to-project-tailwind.css>.",
         );
+        process.exitCode = 2;
+        return;
+    }
+
+    // The maintenance modes below return before any scanning happens, so
+    // pairing them with scan-time flags used to drop those flags in silence.
+    const maintenanceMode = checkCanonical || extractCanonical || cleanupCanonicalFiles;
+    if (maintenanceMode && (fix || dryRun)) {
+        console.error(
+            "normwinds: --fix/--fixall/--dry-run cannot be combined with --check-canonical, --extract-canonical, or --cleanup-canonical-files.",
+        );
+        process.exitCode = 2;
+        return;
+    }
+    if (dryRun && !fix) {
+        console.error("normwinds: --dry-run only applies with --fix or --fixall.");
         process.exitCode = 2;
         return;
     }
@@ -4009,6 +4203,8 @@ async function main() {
         return;
     }
 
+    await loadIgnoreConfig(ignorePatterns);
+
     const [filePaths] = await Promise.all([
         listTargetFiles(patterns),
         (async () => {
@@ -4018,9 +4214,18 @@ async function main() {
     ]);
 
     if (patterns.length > 0 && filePaths.length === 0) {
+        // Exit 2, not 0. A typo'd path in a CI step used to be indistinguishable
+        // from a clean audit, so the job went green having scanned nothing.
         console.error(
             `normwinds: the given pattern(s) matched no lintable files: ${patterns.join(", ")}`,
         );
+        console.error(
+            "Check the path, or pass --allow-empty if matching nothing is expected.",
+        );
+        if (!allowEmpty) {
+            process.exitCode = 2;
+            return;
+        }
     }
 
     let fixIssues = 0;
@@ -4041,7 +4246,12 @@ async function main() {
 
     await saveDiskCache();
 
-    if (json) {
+    if (reporter === "sarif") {
+        console.log(JSON.stringify(buildSarifReport(findings, lintedFiles, {
+            version: NORMWINDS_VERSION,
+            ruleId: RULE_ID,
+        }), null, 2));
+    } else if (reporter === "json") {
         console.log(
             JSON.stringify(
                 {

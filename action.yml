@@ -31,6 +31,20 @@ inputs:
     description: Maximum inline annotations to emit, from 0 to 50. All findings remain in the job summary and JSON report.
     required: false
     default: "10"
+  ignore:
+    description: >-
+      Optional newline-delimited globs to skip. A project-local .normwindignore
+      file is deliberately NOT read in Action mode, because the checkout is
+      untrusted input; use this workflow-authored input instead.
+    required: false
+    default: ""
+  sarif-file:
+    description: >-
+      Optional path, relative to the working directory, to write a SARIF 2.1.0
+      report to. Pair it with github/codeql-action/upload-sarif to surface
+      findings in code scanning. Empty writes no SARIF file.
+    required: false
+    default: ""
 
 outputs:
   version:
@@ -45,6 +59,8 @@ outputs:
     description: "NormWind exit code: 0 clean, 1 findings, or 2 runtime/configuration error."
   report-path:
     description: Absolute path to the machine-readable JSON report on the runner.
+  sarif-path:
+    description: Absolute path to the SARIF report, when the sarif-file input was set.
 
 runs:
   using: node24

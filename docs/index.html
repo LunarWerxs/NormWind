@@ -3,19 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NormWind — Tailwind shorthand audit and safe autofix</title>
+<title>NormWind: Tailwind shorthand audit and safe autofix</title>
 <meta name="description" content="A zero-config CLI and GitHub Action that finds bloated Tailwind utility classes and rewrites them into their short, canonical form. Every rewrite comes from Tailwind's own engine, never a stylistic guess.">
 <link rel="icon" href="assets/icon-256.png" type="image/png">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="NormWind">
 <link rel="canonical" href="https://normwind.lunarwerx.com/">
 <meta property="og:url" content="https://normwind.lunarwerx.com/">
-<meta property="og:title" content="NormWind — Normalize Tailwinds">
+<meta property="og:title" content="NormWind: Normalize Tailwinds">
 <meta property="og:description" content="Audit and safely autofix bloated Tailwind utility classes. Zero config, Tailwind v4, CLI and GitHub Action. MIT-licensed.">
 <meta property="og:image" content="https://normwind.lunarwerx.com/assets/og-image.png">
-<meta property="og:image:alt" content="NormWind — Normalize Tailwinds">
+<meta property="og:image:alt" content="NormWind: Normalize Tailwinds">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="NormWind — Normalize Tailwinds">
+<meta name="twitter:title" content="NormWind: Normalize Tailwinds">
 <meta name="twitter:description" content="Audit and safely autofix bloated Tailwind utility classes. Zero config, Tailwind v4, CLI and GitHub Action. MIT-licensed.">
 <meta name="twitter:image" content="https://normwind.lunarwerx.com/assets/og-image.png">
 <style>
@@ -463,7 +463,7 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
       <div class="term" role="img" aria-label="Mock terminal running npx normwind, showing two findings in a Vue file and a summary line">
         <div class="term-bar">
           <span class="term-dot r"></span><span class="term-dot y"></span><span class="term-dot g"></span>
-          <span class="term-title">normwind — audit</span>
+          <span class="term-title">normwind: audit</span>
         </div>
         <div class="term-body">
           <div class="term-line"><span class="term-prompt">$</span><span class="term-cmd">npx @lunawerx/normwind</span></div>
@@ -545,7 +545,7 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
       <div class="code-window">
         <div class="code-bar">
           <span class="term-dot r"></span><span class="term-dot y"></span><span class="term-dot g"></span>
-          <span class="code-filename">Card.vue — before / after</span>
+          <span class="code-filename">Card.vue: before / after</span>
         </div>
         <pre class="code-body"><code><span class="tok-com">&lt;!-- before --&gt;</span>
 &lt;<span class="tok-key">div</span> <span class="tok-key">class</span>=<span class="tok-str">"px-4 py-4 mt-3 mb-3
@@ -658,7 +658,7 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
   <span class="tok-key">tailwind-audit</span><span class="tok-punc">:</span>
     <span class="tok-key">runs-on</span><span class="tok-punc">:</span> ubuntu-latest
     <span class="tok-key">steps</span><span class="tok-punc">:</span>
-      <span class="tok-punc">-</span> <span class="tok-key">uses</span><span class="tok-punc">:</span> actions/checkout@v4
+      <span class="tok-punc">-</span> <span class="tok-key">uses</span><span class="tok-punc">:</span> actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 <span class="tok-com"># v7</span>
       <span class="tok-punc">-</span> <span class="tok-key">uses</span><span class="tok-punc">:</span> LunarWerxs/NormWind@v3</code></pre>
       </div>
     </div>

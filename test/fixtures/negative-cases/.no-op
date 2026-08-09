@@ -1,0 +1,2 @@
+This fixture asserts that the fixer does NOT rewrite the input.
+See scripts/test-regression.mjs for why the marker exists.

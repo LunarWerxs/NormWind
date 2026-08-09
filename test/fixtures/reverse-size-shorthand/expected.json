@@ -1,7 +1,7 @@
 {
   "ruleId": "tailwindcss/enforces-shorthand",
   "lintedFiles": 1,
-  "findingCount": 4,
+  "findingCount": 3,
   "findings": [
     {
       "filePath": "input.vue",
@@ -14,12 +14,6 @@
       "line": 5,
       "column": 20,
       "message": "Classnames 'hover:w-8, hover:h-8' could be replaced by the 'hover:size-8' shorthand!"
-    },
-    {
-      "filePath": "input.vue",
-      "line": 7,
-      "column": 17,
-      "message": "Classnames 'w-10, h-10' could be replaced by the 'size-10' shorthand!"
     },
     {
       "filePath": "input.vue",

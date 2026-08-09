@@ -1,0 +1,19 @@
+{
+  "ruleId": "tailwindcss/enforces-shorthand",
+  "lintedFiles": 1,
+  "findingCount": 2,
+  "findings": [
+    {
+      "filePath": "input.tsx",
+      "line": 5,
+      "column": 21,
+      "message": "Classnames 'overflow-hidden, text-ellipsis, whitespace-nowrap' could be replaced by the 'truncate' shorthand!"
+    },
+    {
+      "filePath": "input.tsx",
+      "line": 11,
+      "column": 21,
+      "message": "Classnames 'overflow-hidden, text-ellipsis, whitespace-nowrap' could be replaced by the 'truncate' shorthand!"
+    }
+  ]
+}

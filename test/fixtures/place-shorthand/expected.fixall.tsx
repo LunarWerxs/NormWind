@@ -4,13 +4,13 @@
 //   self-end + justify-self-end -> place-self-end
 
 export const PlaceContent = () => (
-    <div className="content-center justify-center grid">place content</div>
+    <div className="place-content-center grid">place content</div>
 );
 
 export const PlaceItems = () => (
-    <div className="items-start justify-items-start grid">place items</div>
+    <div className="place-items-start grid">place items</div>
 );
 
 export const PlaceSelf = () => (
-    <div className="self-end justify-self-end">place self</div>
+    <div className="place-self-end">place self</div>
 );

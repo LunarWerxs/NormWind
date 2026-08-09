@@ -241,7 +241,7 @@ async function fixtureExtraArgs(fixtureDir, mode) {
 }
 
 // Exit-code contract: 1 when findings exist, 0 when clean. This is an
-// invariant on top of the baseline comparison, not a baseline field itself —
+// invariant on top of the baseline comparison, not a baseline field itself:
 // expected.json's shape must not change to accommodate it.
 function checkExitCodeInvariant(label, exitCode, findingCount) {
     if (findingCount > 0 && exitCode !== 1) {
@@ -336,6 +336,34 @@ async function runFixVariant(fixtureDir, fixture, fixFlag, expectedSuffix, optio
             await fs.writeFile(expectedPath, actualText, "utf8");
             return { ok: true, label: fixFlag, note: "baseline written" };
         }
+
+        // A fixture whose input is already normalized turns the fix comparison
+        // into a trivial identity check that passes while verifying nothing.
+        // That is exactly what happens if someone runs the fixer over the
+        // fixture tree by accident and then regenerates baselines instead of
+        // restoring the inputs. Fail loudly rather than going quietly green.
+        //
+        // Deliberate no-op fixtures opt out with a `.no-op` marker file.
+        const originalText = await readTextIfExists(path.join(fixtureDir, input.name));
+        const isDeclaredNoOp = await fs
+            .access(path.join(fixtureDir, ".no-op"))
+            .then(() => true)
+            .catch(() => false);
+        const expectedForOptOut = await readTextIfExists(expectedPath);
+        if (
+            !isDeclaredNoOp
+            && originalText !== null
+            && expectedForOptOut !== null
+            && originalText === expectedForOptOut
+            && expectedSuffix === "fixall"
+        ) {
+            return {
+                ok: false,
+                label: fixFlag,
+                error: `  ${fixFlag}: input.${input.ext.slice(1)} is byte-identical to ${path.basename(expectedPath)}, so this fixture no longer exercises the fix path. Restore the un-normalized input, or add an empty .no-op file to the fixture directory if the no-op IS the assertion.`,
+            };
+        }
+
         const expected = await readTextIfExists(expectedPath);
         if (expected === null) {
             await fs.writeFile(path.join(fixtureDir, `actual.${expectedSuffix}${input.ext}`), actualText, "utf8");
