@@ -97,6 +97,28 @@ async function normalizeTextFile(filePath) {
     await fs.writeFile(filePath, text.replace(/\r\n?/g, "\n"), "utf8");
 }
 
+// ncc derives its internal module ids from the resolved paths of the modules
+// it bundles, so the SAME source produces different bytes depending on how
+// node_modules was laid out. A flat `npm ci` tree and bun's isolated linker
+// (which symlinks each package out to a shared global store) therefore emit
+// bundles that differ from byte ~46 onward even though they behave identically.
+//
+// CI installs with `npm ci`, and that is also what a consumer of the Action
+// gets, so the npm layout is the canonical one and the committed dist/ must
+// match it. Locally, comparing a bun-built bundle against an npm-built
+// baseline is a guaranteed false failure, so the byte comparison is skipped
+// there with a loud note rather than reporting drift that does not exist.
+async function nodeModulesIsCanonical() {
+    for (const dependency of ["tailwindcss", "@babel/parser", "@vercel/ncc"]) {
+        const entry = path.join(REPO_ROOT, "node_modules", ...dependency.split("/"));
+        const stats = await fs.lstat(entry).catch(() => null);
+        if (stats?.isSymbolicLink()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 async function main() {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "normwind-action-build-"));
     const actionOutput = path.join(tempRoot, "action");
@@ -132,9 +154,26 @@ async function main() {
         );
 
         if (CHECK_ONLY) {
+            if (!(await nodeModulesIsCanonical())) {
+                console.log(
+                    "Action bundle byte check SKIPPED: node_modules was not installed by npm "
+                    + "(a symlinked package store changes ncc's module ids, so the bytes cannot match). "
+                    + "CI installs with `npm ci` and enforces this check there. "
+                    + "To regenerate the committed bundle, build from an npm-installed tree.",
+                );
+                return;
+            }
             await compareDirectories(generatedDist, DIST_DIR);
             console.log("Action bundle is up to date.");
             return;
+        }
+
+        if (!(await nodeModulesIsCanonical())) {
+            throw new Error(
+                "Refusing to write dist/ from a non-npm node_modules. ncc bakes resolved module "
+                + "paths into the bundle, so a bun/pnpm store produces bytes CI can never reproduce. "
+                + "Run `npm ci` first (or build in a clean npm-installed checkout) and re-run.",
+            );
         }
 
         assertSafeDistPath(DIST_DIR);
