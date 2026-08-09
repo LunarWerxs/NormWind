@@ -123,7 +123,20 @@ const CLEAN_SOURCE = `<template>\n  <div class="p-4">Clean</div>\n</template>\n`
 addCheck("committed bundle is current", async () => {
     const result = await run(process.execPath, [BUILD_SCRIPT, "--check"]);
     assert(result.exitCode === 0, `${result.stdout}\n${result.stderr}`);
-    assert(result.stdout.includes("Action bundle is up to date."), result.stdout);
+    // ncc bakes resolved module paths into the bundle, so a symlinked package
+    // store (bun, pnpm) can never reproduce the npm-built bytes. build-action
+    // detects that and skips rather than reporting drift that cannot exist.
+    // CI installs with `npm ci`, so the real comparison always runs there.
+    const upToDate = result.stdout.includes("Action bundle is up to date.");
+    const skipped = result.stdout.includes("Action bundle byte check SKIPPED");
+    assert(upToDate || skipped, result.stdout);
+    if (skipped) {
+        assert(
+            !process.env.CI,
+            `the bundle byte check must never be skipped in CI, which installs with npm:\n${result.stdout}`,
+        );
+        console.log("  (byte comparison skipped: node_modules is not an npm layout)");
+    }
 });
 
 addCheck("job-summary HTML is escaped", async () => {
@@ -401,6 +414,17 @@ addCheck("sarif-file and ignore inputs", async () => {
 // nothing used to test them at all.
 const CLI_ENTRY = path.join(REPO_ROOT, "dist", "normwind.mjs");
 
+// NORMWIND_ACTION_WORKSPACE is compared against realpath'd candidates inside
+// the scanner, so it has to BE a real path. The Action wrapper realpaths
+// GITHUB_WORKSPACE for exactly this reason; a test driving the scanner
+// directly has to do the same. On the hosted Windows runner the temp dir
+// resolves through a short path, and on macOS /var is a symlink to
+// /private/var, so passing mkdtemp's raw path made the workspace look like it
+// escaped itself.
+async function realWorkspace(workspace) {
+    return fs.realpath(workspace);
+}
+
 async function runScannerInWorkspace(args, { workspace, cwd = workspace }) {
     return run(process.execPath, [CLI_ENTRY, ...args], {
         cwd,
@@ -426,7 +450,8 @@ async function trySymlink(target, linkPath, type) {
 }
 
 addCheck("scanner refuses paths that escape the Action workspace", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "normwind-action-escape-"));
+    const rawTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "normwind-action-escape-"));
+    const tempRoot = await realWorkspace(rawTempRoot);
     const workspace = path.join(tempRoot, "workspace");
     try {
         await fs.mkdir(path.join(workspace, "src"), { recursive: true });
@@ -487,7 +512,8 @@ addCheck("Action mode ignores a checkout-supplied ignore file", async () => {
     // .normwindignore is checkout-controlled. Honoring it inside the Action
     // would let a pull request silence the audit on exactly the files it
     // changed, so the file is read only outside Action mode.
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "normwind-action-ignore-"));
+    const rawTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "normwind-action-ignore-"));
+    const tempRoot = await realWorkspace(rawTempRoot);
     const workspace = path.join(tempRoot, "workspace");
     try {
         await fs.mkdir(path.join(workspace, "src"), { recursive: true });
