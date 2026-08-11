@@ -354,6 +354,16 @@ npm run canonical:extract   # regenerate
 npm run canonical:check     # verify (deterministic, CI-safe)
 ```
 
+## 🔒 Privacy
+
+Auditing and fixing never touch the network: everything above runs on your files, locally. The one exception is a small anonymous install ping, sent at most once every 24 hours per machine, so we can see roughly how many installs are out there and on which versions.
+
+**What's sent:** the running NormWind version, a coarse OS tag (for example `win11-26100`, `macos`, or `linux`), and a random install id generated on first run and stored in `~/.normwind/state.json`. A country is derived server-side from the request; your IP address is never stored.
+
+**What's never sent:** no account, no filenames, no file contents, no hostname, no username, and no other personal data.
+
+**Opt out:** set `NORMWIND_NO_PING=1` in your environment. The ping is also skipped automatically in test/CI runs and inside the GitHub Action, which never makes this (or any) network call.
+
 ## 🤖 In CI
 
 ### GitHub Action

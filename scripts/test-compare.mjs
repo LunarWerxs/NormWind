@@ -82,7 +82,7 @@ async function runNormwind(cwd, extraEnv = {}) {
     try {
         const { stdout, stderr } = await execFileAsync(NODE_BIN, [NORMWIND_BIN, "--json"], {
             cwd,
-            env: { ...process.env, ...extraEnv, NO_COLOR: "1", FORCE_COLOR: "0" },
+            env: { ...process.env, ...extraEnv, NO_COLOR: "1", FORCE_COLOR: "0", NORMWIND_NO_PING: "1" },
             maxBuffer: 32 * 1024 * 1024,
         });
         return { exitCode: 0, stdout, stderr };

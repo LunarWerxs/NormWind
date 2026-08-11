@@ -232,6 +232,11 @@ export function scannerEnvironment(workspace) {
         NORMWIND_DISABLE_DISK_CACHE: "1",
         NORMWIND_DISABLE_RIPGREP: "1",
         NORMWIND_FORCE_BUNDLED_RUNTIME: "1",
+        // The scanner runs as a plain CLI subprocess and has no way to tell
+        // it's inside a GitHub Action (this allowlist strips CI/GITHUB_ACTIONS
+        // like everything else not named below), so the anonymous install
+        // ping is disabled explicitly rather than relying on ambient env.
+        NORMWIND_NO_PING: "1",
     };
     const preservedKeys = new Set([
         "APPDATA",
