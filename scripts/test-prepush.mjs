@@ -38,7 +38,7 @@ async function run(command, args, options = {}) {
     try {
         const result = await execFileAsync(command, args, {
             cwd: REPO_ROOT,
-            env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0", NORMWIND_NO_PING: "1", ...(options.env ?? {}) },
+            env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0", ...(options.env ?? {}) },
             maxBuffer: 64 * 1024 * 1024,
             ...options,
         });

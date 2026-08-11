@@ -19,7 +19,6 @@ import {
     winningDeclarations,
 } from "../lib/css.mjs";
 import { globPatternToRegExp, hasGlobSyntax } from "../lib/glob.mjs";
-import { sendInstallPing } from "../lib/ping.mjs";
 import { buildSarifReport } from "../lib/sarif.mjs";
 import {
     buildLineStarts,
@@ -4188,29 +4187,19 @@ async function main() {
         }
     }
 
-    // Fired now, unawaited, so the network round trip overlaps with the real
-    // work below instead of adding latency of its own. Every return path past
-    // this point awaits the result once, right before exit, so the ping still
-    // gets its full window (see lib/ping.mjs for the timeout/throttle/opt-out
-    // contract) without ever gating or slowing the audit itself.
-    const pingPromise = sendInstallPing(NORMWINDS_VERSION);
-
     if (cleanupCanonicalFiles) {
         await cleanupCanonicalArtifacts();
         console.log(`normwinds v${NORMWINDS_VERSION}: removed canonical generated artifacts (if present).`);
-        await pingPromise;
         return;
     }
 
     if (checkCanonical) {
         await extractCanonicalReplacements({ writeFiles: false, checkOnly: true });
-        await pingPromise;
         return;
     }
 
     if (extractCanonical) {
         await extractCanonicalReplacements({ writeFiles: writeCanonicalFiles });
-        await pingPromise;
         return;
     }
 
@@ -4235,7 +4224,6 @@ async function main() {
         );
         if (!allowEmpty) {
             process.exitCode = 2;
-            await pingPromise;
             return;
         }
     }
@@ -4285,7 +4273,6 @@ async function main() {
     // from a clean audit (0) or one that merely found lint issues (1), so CI can
     // tell the difference.
     process.exitCode = fixIssues > 0 || scanIssues > 0 ? 2 : findings.length > 0 ? 1 : 0;
-    await pingPromise;
 }
 
 main().catch((error) => {

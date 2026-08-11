@@ -27,6 +27,3 @@ test/fixtures/**/actual.*
 
 # Generated agent code map (local artifact; rebuild with ~/.claude/tools/codemap.py)
 .claude/codemap/
-
-# Local AI memory for this repo. Deliberately NOT published.
-/.claude/memory/
