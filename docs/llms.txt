@@ -1,0 +1,23 @@
+# NormWind
+
+> A zero-config CLI and GitHub Action that finds bloated Tailwind utility classes and rewrites them into their short, canonical form. Every rewrite comes from Tailwind's own engine, never a stylistic guess.
+
+NormWind is an npm package (`@lunawerx/normwind`, node 20+) that audits Tailwind CSS class strings for two kinds of noise: verbose utility combinations like `px-4 py-4`, and arbitrary values that already have a canonical named utility like `rounded-[24px]`. It can report findings only or safely rewrite them, as a standalone CLI or as a first-party GitHub Action, with no rules file, no sort order, and no opinions imposed on the scanned repo.
+
+## Key facts
+- Zero config: no rules file, no sort order, no opinions imposed on your repo.
+- Audits and can fix Vue, Svelte, Astro, HTML/HTM, JS, MJS, CJS, TS, JSX, TSX, MTS, and CTS files.
+- `--fix` is the safe default: covers every markup format (Vue, Svelte, Astro, HTML) and re-runs the audit after rewriting.
+- `--fixall` widens the same rewrites to the whole codebase, including JS and TS files.
+- `--dry-run` previews which files would be rewritten without touching disk; `--json` prints machine-readable findings for CI.
+- Canonical values come from Tailwind's own `designSystem.canonicalizeCandidates` engine; shorthand groups come from `eslint-plugin-tailwindcss`'s utility-group definitions.
+- Ships a first-party GitHub Action that annotates pull requests inline and fails the job when findings exist.
+- Exit codes: `0` nothing to clean up, `1` findings reported, `2` usage or runtime error.
+- Free, open-source software, MIT-licensed. Not affiliated with Tailwind Labs.
+
+## Links
+- Home: https://normwind.lunarwerx.com/
+- Source code: https://github.com/LunarWerxs/NormWind
+- npm package: https://www.npmjs.com/package/@lunawerx/normwind
+- GitHub Action: https://github.com/marketplace/actions/normwind-tailwind-audit
+- License: https://github.com/LunarWerxs/NormWind/blob/main/LICENSE

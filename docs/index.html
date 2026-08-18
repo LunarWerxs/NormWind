@@ -412,6 +412,118 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
         })(window, document, 'ak_699988228a77ffbba051bf3629431ba08812');
     </script>
     <!-- End ARGUS Analytics Pixel -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "SoftwareApplication",
+          "@id": "https://normwind.lunarwerx.com/#app",
+          "name": "NormWind",
+          "description": "A zero-config CLI and GitHub Action that finds bloated Tailwind utility classes and rewrites them into their short, canonical form. Every rewrite comes from Tailwind's own engine, never a stylistic guess.",
+          "applicationCategory": "DeveloperApplication",
+          "url": "https://normwind.lunarwerx.com/",
+          "downloadUrl": "https://www.npmjs.com/package/@lunawerx/normwind",
+          "softwareHelp": "https://github.com/LunarWerxs/NormWind",
+          "image": "https://normwind.lunarwerx.com/assets/og-image.png",
+          "featureList": [
+            "Audit mode (normwind): reports every finding with file and line, exits 1 when findings exist",
+            "--fix: rewrites .vue files and re-runs the audit, with per-file fault isolation",
+            "--fixall: applies the same rewrites across the whole codebase (Vue, JS, MJS, TS, JSX, TSX)",
+            "--dry-run: shows which files would be rewritten without touching disk",
+            "--json: machine-readable findings for CI dashboards and custom reporters",
+            "Scope by folder or glob, or run with no arguments to scan the whole project",
+            "First-party GitHub Action with inline pull-request annotations and CI failure on findings",
+            "Canonical rewrites sourced from Tailwind's own canonicalizeCandidates engine and eslint-plugin-tailwindcss group data"
+          ],
+          "offers": {
+            "@type": "Offer",
+            "price": "0",
+            "priceCurrency": "USD"
+          },
+          "author": {
+            "@id": "https://lunarwerx.com/#org"
+          },
+          "publisher": {
+            "@id": "https://lunarwerx.com/#org"
+          }
+        },
+        {
+          "@type": "Organization",
+          "@id": "https://lunarwerx.com/#org",
+          "name": "LunarWerx Studios",
+          "url": "https://lunarwerx.com/",
+          "logo": "https://lunarwerx.com/logowhite.webp",
+          "sameAs": [
+            "https://github.com/LunarWerxs"
+          ]
+        },
+        {
+          "@type": "WebSite",
+          "@id": "https://normwind.lunarwerx.com/#site",
+          "name": "NormWind",
+          "url": "https://normwind.lunarwerx.com/",
+          "publisher": {
+            "@id": "https://lunarwerx.com/#org"
+          }
+        },
+        {
+          "@type": "FAQPage",
+          "@id": "https://normwind.lunarwerx.com/#faq",
+          "mainEntity": [
+            {
+              "@type": "Question",
+              "name": "Is NormWind free?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Yes. NormWind is free, open-source software released under the MIT License, not affiliated with Tailwind Labs. It ships as an npm package you can run directly with npx @lunawerx/normwind, with no rules file, no sort order, and no configuration required before you start."
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "Does NormWind require any configuration?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "No. NormWind is zero-config: there is no rules file to write, no sort order to define, and no opinions imposed on your repository. Point it at a project with npx @lunawerx/normwind for an immediate audit, or narrow the scan to a folder or glob if you want."
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "What does NormWind actually fix?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "NormWind collapses two kinds of Tailwind class-string noise: verbose utility combinations, such as px-4 py-4 becoming p-4, and arbitrary values that already have a canonical named utility, such as rounded-[24px] becoming rounded-3xl. Every rewrite comes from Tailwind's own canonicalization engine, never a stylistic guess."
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "Which file types does NormWind support?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "By default NormWind scans Vue, Svelte, Astro, HTML/HTM, JS, MJS, CJS, TS, JSX, TSX, MTS, and CTS files. The safe --fix mode covers every markup format (Vue, Svelte, Astro, HTML), while --fixall applies the same rewrites across the full JavaScript and TypeScript file set as well."
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "Does NormWind work with GitHub Actions or other CI systems?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Yes. NormWind ships a first-party GitHub Action that annotates pull requests inline and fails the job when findings exist. On any other CI provider, running npx @lunawerx/normwind --json is enough, since the exit code already reports pass or fail and the JSON output is stable for a custom reporter."
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "Can NormWind fix my code automatically, or does it just report issues?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Both. Running normwind alone only audits and reports findings, exiting with code 1 if anything is found. Adding --fix safely rewrites markup files and re-runs the audit, while --fixall extends the same rewrites across the whole codebase. Pair either with --dry-run to preview changes without writing to disk."
+              }
+            }
+          ]
+        }
+      ]
+    }
+    </script>
 </head>
 <body>
 <a class="lw-parent" href="https://lunarwerx.com/" aria-label="Back to LunarWerx Studios, the parent studio"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg><span class="lw-tip" aria-hidden="true"><span>LunarWerx Studios</span><span>Every app we build, in one place</span></span></a>
@@ -660,6 +772,52 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
     <span class="tok-key">steps</span><span class="tok-punc">:</span>
       <span class="tok-punc">-</span> <span class="tok-key">uses</span><span class="tok-punc">:</span> actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 <span class="tok-com"># v7</span>
       <span class="tok-punc">-</span> <span class="tok-key">uses</span><span class="tok-punc">:</span> LunarWerxs/NormWind@v3</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- ============ FAQ ============ -->
+  <section class="section" id="faq" aria-labelledby="faq-heading">
+    <div class="container">
+      <div class="section-head">
+        <p class="eyebrow">// faq</p>
+        <h2 id="faq-heading">Questions people ask before they install it.</h2>
+        <p>Short, direct answers pulled straight from the docs above.</p>
+      </div>
+
+      <div class="feature-grid">
+        <div class="card">
+          <div class="card-icon">?</div>
+          <h3>Is NormWind free?</h3>
+          <p>Yes. NormWind is free, open-source software released under the MIT License, not affiliated with Tailwind Labs. It ships as an npm package you can run directly with <code class="cls">npx @lunawerx/normwind</code>, with no rules file, no sort order, and no configuration required before you start.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">?</div>
+          <h3>Does NormWind require any configuration?</h3>
+          <p>No. NormWind is zero-config: there is no rules file to write, no sort order to define, and no opinions imposed on your repository. Point it at a project with <code class="cls">npx @lunawerx/normwind</code> for an immediate audit, or narrow the scan to a folder or glob if you want.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">?</div>
+          <h3>What does NormWind actually fix?</h3>
+          <p>NormWind collapses two kinds of Tailwind class-string noise: verbose utility combinations, such as <code class="cls">px-4 py-4</code> becoming <code class="cls">p-4</code>, and arbitrary values that already have a canonical named utility, such as <code class="cls">rounded-[24px]</code> becoming <code class="cls">rounded-3xl</code>. Every rewrite comes from Tailwind's own canonicalization engine, never a stylistic guess.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">?</div>
+          <h3>Which file types does NormWind support?</h3>
+          <p>By default NormWind scans Vue, Svelte, Astro, HTML/HTM, JS, MJS, CJS, TS, JSX, TSX, MTS, and CTS files. The safe <code class="cls">--fix</code> mode covers every markup format (Vue, Svelte, Astro, HTML), while <code class="cls">--fixall</code> applies the same rewrites across the full JavaScript and TypeScript file set as well.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">?</div>
+          <h3>Does NormWind work with GitHub Actions or other CI systems?</h3>
+          <p>Yes. NormWind ships a first-party GitHub Action that annotates pull requests inline and fails the job when findings exist. On any other CI provider, running <code class="cls">npx @lunawerx/normwind --json</code> is enough, since the exit code already reports pass or fail and the JSON output is stable for a custom reporter.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">?</div>
+          <h3>Can NormWind fix my code automatically, or does it just report issues?</h3>
+          <p>Both. Running <code class="cls">normwind</code> alone only audits and reports findings, exiting with code <code class="cls">1</code> if anything is found. Adding <code class="cls">--fix</code> safely rewrites markup files and re-runs the audit, while <code class="cls">--fixall</code> extends the same rewrites across the whole codebase. Pair either with <code class="cls">--dry-run</code> to preview changes without writing to disk.</p>
+        </div>
       </div>
     </div>
   </section>
