@@ -889,5 +889,60 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
   })();
 </script>
 
+<!-- LunarWerx Discord badge. Self-contained: no external requests, no build step,
+     no dependency on this page's CSS. Everything is namespaced `lwdc-` so it
+     cannot collide with the host page, and the pill carries its own colour
+     rather than borrowing the theme -- these nine sites run every background
+     from cream paper to near-black, and one that follows the OS, so a panel
+     tinted to match "the site" would be wrong on at least three of them.
+     Blurple on white reads on all of them and says which platform without a word.
+     Edit once in the LunarWerx repo (scripts/discord-badge/) and re-run the
+     installer; do not hand-edit the copies. -->
+<div id="lwdc-badge" hidden>
+  <a id="lwdc-link" href="https://discord.gg/PsWpeNUzhk" target="_blank" rel="noopener noreferrer">
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.317 4.3698a19.7913 19.7913 0 0 0-4.8851-1.5152.0741.0741 0 0 0-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 0 0-.0785-.037 19.7363 19.7363 0 0 0-4.8852 1.515.0699.0699 0 0 0-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 0 0 .0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 0 0 .0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 0 0-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 0 1-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 0 1 .0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 0 1 .0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 0 1-.0066.1276 12.2986 12.2986 0 0 1-1.873.8914.0766.0766 0 0 0-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 0 0 .0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 0 0 .0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 0 0-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z"/></svg>
+    <span>Join the crew</span>
+  </a>
+  <button id="lwdc-x" type="button" aria-label="Hide the Discord invite">&times;</button>
+</div>
+<style>
+#lwdc-badge{position:fixed;right:12px;bottom:12px;z-index:2147483000;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;opacity:0;transform:translateY(12px) scale(.96);transition:opacity .26s ease,transform .26s cubic-bezier(.22,1,.36,1)}
+#lwdc-badge[hidden]{display:none}
+#lwdc-badge.lwdc-in{opacity:1;transform:none}
+#lwdc-link{display:flex;align-items:center;gap:9px;padding:9px 15px 9px 12px;border-radius:9999px;background:linear-gradient(160deg,#5865f2,#4650d8);color:#fff;text-decoration:none;box-shadow:0 10px 26px -8px rgba(30,35,105,.65),0 0 0 1px rgba(255,255,255,.14) inset;transition:transform .2s ease,box-shadow .2s ease}
+#lwdc-link:hover,#lwdc-link:focus-visible{transform:translateY(-2px);box-shadow:0 14px 30px -8px rgba(30,35,105,.8),0 0 0 1px rgba(255,255,255,.28) inset;outline:none}
+#lwdc-link svg{width:20px;height:20px;flex:none}
+#lwdc-link span{font-size:13px;font-weight:600;line-height:1;white-space:nowrap;letter-spacing:.01em}
+#lwdc-x{position:absolute;top:-7px;right:-5px;width:21px;height:21px;display:grid;place-items:center;padding:0;border:1px solid rgba(255,255,255,.22);border-radius:9999px;background:#2b2f45;color:#c7cbe0;font-size:14px;line-height:1;cursor:pointer;transition:color .15s,background-color .15s}
+#lwdc-x:hover,#lwdc-x:focus-visible{background:#3a3f5c;color:#fff;outline:none}
+@media (min-width:640px){#lwdc-badge{right:24px;bottom:24px}}
+@media (prefers-reduced-motion:reduce){#lwdc-badge{transition:none}}
+</style>
+<script>
+(function () {
+  // One key across every LunarWerx property, so closing it on one product site
+  // is not undone by the next one. localStorage is per-origin, so this is a
+  // per-site memory in practice -- the shared name is for consistency, not
+  // cross-domain state, which a static page cannot have anyway.
+  var KEY = 'lw:discord-badge-dismissed';
+  var el = document.getElementById('lwdc-badge');
+  if (!el) return;
+  // Wrapped because Safari with storage blocked THROWS on access rather than
+  // returning null, and a social badge must never be able to break a page.
+  function got(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  if (got(KEY) === '1') return;
+  setTimeout(function () {
+    el.hidden = false;
+    // Next frame, so the transition has a start state to move from.
+    requestAnimationFrame(function () { el.classList.add('lwdc-in'); });
+  }, 1400);
+  document.getElementById('lwdc-x').addEventListener('click', function () {
+    el.classList.remove('lwdc-in');
+    setTimeout(function () { el.hidden = true; }, 280);
+    try { localStorage.setItem(KEY, '1'); } catch (e) { /* blocked; gone for this page anyway */ }
+  });
+})();
+</script>
+<!-- /LunarWerx Discord badge -->
 </body>
 </html>
