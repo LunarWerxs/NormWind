@@ -14,6 +14,14 @@ User-agent: Claude-User
 Allow: /
 User-agent: PerplexityBot
 Allow: /
+User-agent: Perplexity-User
+Allow: /
+User-agent: MistralAI-User
+Allow: /
+User-agent: DuckAssistBot
+Allow: /
+User-agent: Google-CloudVertexBot
+Allow: /
 
 # Training crawlers: allowed on purpose. These are free, open products.
 User-agent: GPTBot
@@ -35,8 +43,31 @@ Allow: /
 User-agent: Bytespider
 Allow: /
 
+# Web indexers that answer engines retrieve from. Same access as the
+# wildcard group below, stated explicitly so it does not depend on a
+# fall-through.
+User-agent: Bingbot
+# The machine-readable files stay readable even though the rest of
+# this folder does not: longest matching pattern wins, so these beat
+# the Disallow below.
+Allow: /llms.txt
+Allow: /llms-full.txt
+Allow: /pricing.md
+Allow: /sitemap.xml
+Allow: /$
+Allow: /assets/
+Disallow: /reference/
+Disallow: /
+
 # Everyone else. The landing page is the only page here; the rest of this folder is repository documentation that happens to sit in the Pages root.
 User-agent: *
+# The machine-readable files stay readable even though the rest of
+# this folder does not: longest matching pattern wins, so these beat
+# the Disallow below.
+Allow: /llms.txt
+Allow: /llms-full.txt
+Allow: /pricing.md
+Allow: /sitemap.xml
 Allow: /$
 Allow: /assets/
 Disallow: /reference/

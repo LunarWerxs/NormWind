@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NormWind: Tailwind shorthand audit and safe autofix</title>
-<meta name="description" content="A zero-config CLI and GitHub Action that finds bloated Tailwind utility classes and rewrites them into their short, canonical form. Every rewrite comes from Tailwind's own engine, never a stylistic guess.">
+<meta name="description" content="A zero-config CLI and GitHub Action that finds bloated Tailwind classes and rewrites them into their short, canonical form using Tailwind's own engine.">
 <link rel="icon" href="assets/icon-256.png" type="image/png">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="NormWind">
@@ -274,6 +274,9 @@
   .card p { color: var(--muted); font-size: 0.95rem; }
   .card.wide { grid-column: span 2; }
 
+  /* ---------- Compare grid ---------- */
+  .compare-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 20px; }
+
   /* ---------- Split section ---------- */
   .split .container { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 56px; align-items: center; }
   .split-copy h2 { font-size: clamp(1.6rem, 3vw, 2.1rem); margin-bottom: 16px; }
@@ -317,6 +320,9 @@
   .footer-links a:hover { color: var(--ink); }
   .footer-links img { width: 17px; height: 17px; filter: invert(1) brightness(1.6); }
   .footer-meta { color: var(--faint); font-size: 0.82rem; font-family: var(--font-mono); margin-top: 22px; text-align: center; }
+  .footer-fleet { color: var(--faint); font-size: 0.86rem; margin-top: 22px; text-align: center; }
+  .footer-fleet a { color: var(--muted); text-decoration: none; }
+  .footer-fleet a:hover { color: var(--ink); }
 
   /* ---------- Responsive ---------- */
   @media (max-width: 980px){
@@ -327,6 +333,7 @@
     .split-copy { order: 1; }
     .split .code-window { order: 2; }
     .swap-grid { grid-template-columns: 1fr; }
+    .compare-grid { grid-template-columns: 1fr; }
   }
   @media (max-width: 680px){
     .nav-links { display: none; }
@@ -422,6 +429,8 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
           "name": "NormWind",
           "description": "A zero-config CLI and GitHub Action that finds bloated Tailwind utility classes and rewrites them into their short, canonical form. Every rewrite comes from Tailwind's own engine, never a stylistic guess.",
           "applicationCategory": "DeveloperApplication",
+          "operatingSystem": "Windows, macOS, Linux",
+          "softwareVersion": "3.8.0",
           "url": "https://normwind.lunarwerx.com/",
           "downloadUrl": "https://www.npmjs.com/package/@lunawerx/normwind",
           "softwareHelp": "https://github.com/LunarWerxs/NormWind",
@@ -466,6 +475,24 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
           "publisher": {
             "@id": "https://lunarwerx.com/#org"
           }
+        },
+        {
+          "@type": "BreadcrumbList",
+          "@id": "https://normwind.lunarwerx.com/#breadcrumb",
+          "itemListElement": [
+            {
+              "@type": "ListItem",
+              "position": 1,
+              "name": "LunarWerx Studios",
+              "item": "https://lunarwerx.com/"
+            },
+            {
+              "@type": "ListItem",
+              "position": 2,
+              "name": "NormWind",
+              "item": "https://normwind.lunarwerx.com/"
+            }
+          ]
         },
         {
           "@type": "FAQPage",
@@ -518,6 +545,22 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
                 "@type": "Answer",
                 "text": "Both. Running normwind alone only audits and reports findings, exiting with code 1 if anything is found. Adding --fix safely rewrites markup files and re-runs the audit, while --fixall extends the same rewrites across the whole codebase. Pair either with --dry-run to preview changes without writing to disk."
               }
+            },
+            {
+              "@type": "Question",
+              "name": "Does NormWind work offline?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Yes. NormWind resolves the Tailwind install already inside your project, or falls back to a canonical snapshot bundled with the package, so audits and fixes run without any network calls. The only time NormWind touches the network is the one-off npm or npx download of the package itself."
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "How is NormWind different from Prettier or eslint-plugin-tailwindcss?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "They do different jobs. prettier-plugin-tailwindcss only reorders classes and trims exact duplicates, not px-4 py-4 into p-4. eslint-plugin-tailwindcss's enforces-shorthand rule does that same merge, but needs ESLint installed and a Tailwind CSS config path set. NormWind bundles the same shorthand data as a zero-config CLI and GitHub Action, no ESLint setup required."
+              }
             }
           ]
         }
@@ -539,6 +582,7 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
       <li><a href="#trust">Why trust it</a></li>
       <li><a href="#modes">Fix modes</a></li>
       <li><a href="#ci">CI</a></li>
+      <li><a href="#compare">Compares</a></li>
       <li><a href="https://github.com/LunarWerxs/NormWind">Source</a></li>
     </ul>
     <a class="nav-cta" href="https://www.npmjs.com/package/@lunawerx/normwind">Get it on npm</a>
@@ -551,7 +595,7 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
   <section class="hero container" aria-labelledby="hero-heading">
     <div class="hero-grid">
       <div>
-        <p class="eyebrow">@lunawerx/normwind · v3.7.0 · node 20+</p>
+        <p class="eyebrow">@lunawerx/normwind · v3.8.0 · node 20+</p>
         <h1 id="hero-heading">Your Tailwind classes are longer <span class="accent">than Tailwind needs them to be.</span></h1>
         <p class="hero-sub">A zero-config CLI and GitHub Action that finds bloated utility strings and rewrites them into their short, canonical form. No rules file, no sort order, no opinions imposed on your repo.</p>
         <div class="hero-actions">
@@ -778,6 +822,32 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
 
   <hr class="divider">
 
+  <!-- ============ COMPARE ============ -->
+  <section class="section" id="compare" aria-labelledby="compare-heading">
+    <div class="container">
+      <div class="section-head">
+        <p class="eyebrow">// how it compares</p>
+        <h2 id="compare-heading">NormWind vs. the tools you already run.</h2>
+        <p>NormWind isn't a replacement for your formatter or linter: it does a narrower job than either. Here's how it lines up against the two tools most Tailwind projects already have installed.</p>
+      </div>
+
+      <div class="compare-grid">
+        <div class="card">
+          <div class="card-icon">P</div>
+          <h3>vs. <code>prettier-plugin-tailwindcss</code></h3>
+          <p>Prettier's official Tailwind plugin sorts your classes into a recommended order and trims exact duplicates and stray whitespace. It doesn't merge <code class="cls">px-4 py-4</code> into <code class="cls">p-4</code> or turn <code class="cls">rounded-[24px]</code> into <code class="cls">rounded-3xl</code>, that's a different kind of rewrite. The two run side by side without conflict: Prettier orders, NormWind shortens.</p>
+        </div>
+        <div class="card deep">
+          <div class="card-icon">E</div>
+          <h3>vs. <code>eslint-plugin-tailwindcss</code></h3>
+          <p>Its <code class="cls">enforces-shorthand</code> rule does the same kind of merge NormWind does, and in fact NormWind's own shorthand groups are sourced from this plugin's utility-group data. The difference is setup: that rule needs ESLint installed and a <code class="cls">cssConfigPath</code> pointed at your Tailwind CSS file. NormWind ships the same data as a zero-config, standalone CLI and GitHub Action, no ESLint required.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
   <!-- ============ FAQ ============ -->
   <section class="section" id="faq" aria-labelledby="faq-heading">
     <div class="container">
@@ -818,6 +888,16 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
           <h3>Can NormWind fix my code automatically, or does it just report issues?</h3>
           <p>Both. Running <code class="cls">normwind</code> alone only audits and reports findings, exiting with code <code class="cls">1</code> if anything is found. Adding <code class="cls">--fix</code> safely rewrites markup files and re-runs the audit, while <code class="cls">--fixall</code> extends the same rewrites across the whole codebase. Pair either with <code class="cls">--dry-run</code> to preview changes without writing to disk.</p>
         </div>
+        <div class="card">
+          <div class="card-icon">?</div>
+          <h3>Does NormWind work offline?</h3>
+          <p>Yes. NormWind resolves the Tailwind install already inside your project, or falls back to a canonical snapshot bundled with the package, so audits and fixes run without any network calls. The only time NormWind touches the network is the one-off npm or npx download of the package itself.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">?</div>
+          <h3>How is NormWind different from Prettier or eslint-plugin-tailwindcss?</h3>
+          <p>They do different jobs. <code class="cls">prettier-plugin-tailwindcss</code> only reorders classes and trims exact duplicates, not <code class="cls">px-4 py-4</code> into <code class="cls">p-4</code>. <code class="cls">eslint-plugin-tailwindcss</code>'s <code class="cls">enforces-shorthand</code> rule does that same merge, but needs ESLint installed and a Tailwind CSS config path set. NormWind bundles the same shorthand data as a zero-config CLI and GitHub Action, no ESLint setup required.</p>
+        </div>
       </div>
     </div>
   </section>
@@ -854,7 +934,8 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
         <li><a href="https://lunarwerx.com">lunarwerx.com</a></li>
       </ul>
     </div>
-    <p class="footer-meta">Free, open-source software. Not affiliated with Tailwind Labs.</p>
+    <p class="footer-fleet">More from LunarWerx Studios: <a href="https://repoyeti.com">RepoYeti</a>, <a href="https://agenthydra.lunarwerx.com">AgentHydra</a>, <a href="https://sagethumbs.lunarwerx.com">SageThumbs</a>, <a href="https://quickdictate.lunarwerx.com">QuickDictate</a>, and <a href="https://rolodexter.lunarwerx.com">RoloDexter</a>.</p>
+    <p class="footer-meta">Free, open-source software. Not affiliated with Tailwind Labs. Last updated: 2026-08-23.</p>
   </div>
 </footer>
 

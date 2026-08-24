@@ -20,6 +20,8 @@ A zero-config CLI and GitHub Action that finds bloated Tailwind utility classes 
 
 ---
 
+NormWind is a zero-config CLI and GitHub Action that audits Tailwind CSS class strings in Vue, Svelte, Astro, HTML, JavaScript, and TypeScript files, then rewrites verbose utility combinations and non-canonical arbitrary values into their shorter canonical form using Tailwind's own canonicalization engine, without imposing a rules file or sort order on the project.
+
 Tailwind codebases drift. Over time (especially with a dozen hands and a few AI assistants on the keyboard) class strings pile up combinations that are perfectly valid but noisier than they need to be. `px-4 py-4` where `p-4` would do. `rounded-[24px]` where `rounded-3xl` already exists. `w-6 h-6` instead of `size-6`.
 
 **NormWind** hunts those down. Point it at your project and it will either **tell you** what could be tightened, or **fix it for you**: safely, deterministically, and without forcing a formatter, a sort order, or any config on your repo.
@@ -651,9 +653,44 @@ Initial public release. Shorthand auditor and autofixer for Tailwind CSS utility
 
 </details>
 
+## 🔍 How it compares
+
+NormWind sits next to two tools people already reach for when tidying Tailwind class strings, rather than replacing either:
+
+- **[`prettier-plugin-tailwindcss`](https://github.com/tailwindlabs/prettier-plugin-tailwindcss)** (Tailwind Labs' own Prettier plugin) sorts class names into Tailwind's recommended order. By its own documentation it does not merge shorthand combinations or rewrite arbitrary values. NormWind does the opposite job, and the two compose fine in the same project: let Prettier sort, let NormWind shorten.
+- **[`eslint-plugin-tailwindcss`](https://github.com/francoismassart/eslint-plugin-tailwindcss)**'s `enforces-shorthand` rule is an ESLint rule with its own autofix, and NormWind reuses its utility-group data rather than duplicating it (see "A note on Tailwind v4 & eslint-plugin-tailwindcss" above). But the rule runs inside an ESLint config, and under Tailwind v4 its config path can return only `separator` and `prefix`, which keeps it from resolving many utility families. NormWind runs standalone, as a CLI or GitHub Action, with no ESLint setup required, and also canonicalizes arbitrary values via Tailwind's own engine, which shorthand-focused linting doesn't cover.
+
+## ❓ FAQ
+
+**Is NormWind free?**
+Yes. NormWind is free, open-source software licensed under MIT. Install it with npm, or skip installation entirely and run it with npx. The GitHub Action is also free to use and requires no API token, no signup, and no paid tier; it's published on the GitHub Marketplace and the source is on GitHub.
+
+**Does it require any configuration?**
+No. NormWind is zero-config: there's no rules file to write, no sort order to choose, and no plugins to register. Point it at a project, a specific path, or a glob and it audits or fixes immediately. Optional flags like `--ignore`, `--theme-css`, or a `.normwindignore` file exist, but none are required to get started.
+
+**Does it modify my files automatically, or just report issues?**
+By default, running `normwind` only audits and reports findings; it never writes to disk unless you pass `--fix` or `--fixall`. `--fix` rewrites markup formats (Vue, Svelte, Astro, HTML) safely; `--fixall` extends that to JS/TS files too. Both write atomically and preserve file modes, but you should still run them from a clean, version-controlled working tree.
+
+**Is my code sent anywhere, or does it need an API key?**
+No. NormWind runs entirely against your local files and your project's installed Tailwind engine; it needs no API token or account. The GitHub Action bundles NormWind, Tailwind, and Babel itself, installs nothing on the runner, and strips inherited secrets from its scanner process, so it has no documented path to send code out during a scan.
+
+**What are the system requirements?**
+NormWind requires Node.js 20 or later, per its `package.json` engines field. It works against Tailwind CSS v4 projects: full shorthand and arbitrary-value canonicalization on Tailwind 4.1 through 4.3, and shorthand-only auditing on 4.0, since that release doesn't expose the canonicalization API NormWind depends on for arbitrary values.
+
+**Does it support Tailwind CSS v3?**
+The repo documents support for Tailwind CSS v4 only, spanning 4.0 through the bundled 4.3.3. Arbitrary-value canonicalization relies on Tailwind's `designSystem.canonicalizeCandidates` engine, a v4 API. No v3 compatibility is documented in the README or changelog, so treat NormWind as a v4-only tool unless a future release states otherwise.
+
+**How is it different from `prettier-plugin-tailwindcss`?**
+Tailwind's own Prettier plugin sorts class names into a recommended order; by its own documentation it doesn't merge shorthand or touch arbitrary values. NormWind does the opposite job: it collapses verbose combinations like `px-4 py-4` into `p-4` and rewrites arbitrary values like `rounded-[24px]` into `rounded-3xl`. The two tools solve different problems and can be used together.
+
+**What happens if a rewrite might change my page's rendered CSS?**
+NormWind skips it. Before merging classes like `ml-2 mr-2` into `mx-2`, it compiles both the before and after class lists through Tailwind's own engine and compares the resulting CSS declarations. If another utility in the same group (say, an existing `mx-8`) would change which value wins, the merge is skipped rather than applied blind.
+
 ## 📄 License
 
 [MIT](LICENSE) © [LunarWerx](https://github.com/LunarWerxs)
+
+Made by [LunarWerx Studios](https://lunarwerx.com). Check out sibling projects [RepoYeti](https://repoyeti.com), [SageThumbs](https://sagethumbs.lunarwerx.com), and [QuickDictate](https://quickdictate.lunarwerx.com).
 
 <div align="center">
 <br/>

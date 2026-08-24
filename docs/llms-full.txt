@@ -1,0 +1,146 @@
+# NormWind - full reference for AI agents and answer engines
+
+> Complete plain-text brief for https://normwind.lunarwerx.com/. Complements the shorter
+> /llms.txt with every feature, FAQ, and comparison in one file.
+
+## What it is
+
+NormWind is a zero-config CLI and GitHub Action, published as the npm package
+`@lunawerx/normwind` (current version 3.8.0, requires Node 20+), that audits Tailwind CSS
+class strings for two kinds of noise and can safely rewrite them:
+
+1. Verbose utility combinations that Tailwind can express as shorthand, e.g.
+   `px-4 py-4` -> `p-4`, `w-6 h-6` -> `size-6`, `content-center justify-center` ->
+   `place-content-center`.
+2. Arbitrary values that already have a canonical named utility, e.g.
+   `rounded-[24px]` -> `rounded-3xl`, `w-[100%]` -> `w-full`, `h-[1.5rem]` -> `h-6`.
+
+Free, open-source software under the MIT License. Not affiliated with Tailwind Labs.
+
+## Who it's for
+
+Teams and solo developers using Tailwind CSS v4 who want tidy, consistent class strings
+without adopting a rules file, a sort order, or any other opinionated config. Works both as
+a local one-off check and as CI enforcement so utility bloat never lands on `main`.
+
+## Why the rewrites can be trusted
+
+- Shorthand groups come from `eslint-plugin-tailwindcss`'s own utility-group definitions.
+- Canonical values come from Tailwind's own `designSystem.canonicalizeCandidates` engine.
+- NormWind resolves the Tailwind install inside the scanned project first, so fixes match
+  the version that will actually build it.
+- A merge is applied only when it cannot change the rendered CSS: if another utility in the
+  same class list targets the same property at a different value, NormWind resolves the
+  before/after class lists through Tailwind's own engine and skips the merge if the
+  resulting declarations differ at all.
+- Nothing is written to the repo beyond the file being fixed; a bundled canonical snapshot
+  makes the first run fast and deterministic without a live Tailwind compile.
+
+## File types supported
+
+Vue, Svelte, Astro, HTML, HTM, JS, MJS, CJS, TS, JSX, TSX, MTS, and CTS: 13 extensions in
+total. `--fix` covers the four markup formats (Vue, Svelte, Astro, HTML); `--fixall` widens
+the same rewrites to every JS/TS variant as well.
+
+## Install
+
+    npm i -D @lunawerx/normwind
+    # or, no install:
+    npx @lunawerx/normwind
+
+Both `normwind` and `normwinds` command names are exposed.
+
+## CLI usage
+
+    npx @lunawerx/normwind                     # audit; exit 1 if findings exist
+    npx @lunawerx/normwind --fix                # safe markup-first fix, then re-audit
+    npx @lunawerx/normwind --fixall             # fix across the whole codebase (adds JS/TS)
+    npx @lunawerx/normwind --fixall --dry-run   # preview a fix run, write nothing
+    npx @lunawerx/normwind --json               # machine-readable findings for CI
+    npx @lunawerx/normwind src                  # scope to a folder or glob
+
+Other flags: `--reporter <text|json|sarif>` (SARIF 2.1.0 for GitHub code scanning),
+`--ignore <glob>` (repeatable), `--allow-empty`, `--extract-canonical
+--write-canonical-files`, `--check-canonical`, `--cleanup-canonical-files`,
+`--suggest-named-theme-vars --theme-css <path>` (opt-in, off by default).
+
+## Exit codes
+
+- `0`: nothing to clean up, or a requested maintenance command completed.
+- `1`: audit findings exist, or canonical drift was detected.
+- `2`: usage/runtime error, a pattern matched no lintable files (pass `--allow-empty` for
+  `0` instead), an incompatible flag combination, or `--fix`/`--fixall` finished with files
+  skipped or failed.
+
+## GitHub Action
+
+A first-party GitHub Action (`LunarWerxs/NormWind@v3`) annotates pull requests inline and
+fails the job when findings exist. It emits up to 10 inline annotations by default
+(configurable from 0 to 50 via the `max-annotations` input); every finding still lands in
+the job summary and the JSON report regardless of that cap. A single run also refuses to
+push more than 1,000 unique cache misses through the live canonicalizer, so scanning
+untrusted code cannot balloon into an out-of-memory crash. `.normwindignore` is
+deliberately not read in Action mode (the checkout is untrusted input); use the workflow's
+`ignore` input instead.
+
+## Pricing
+
+Free. Open source under the MIT License, no paid tier. See /pricing.md for the
+machine-readable version.
+
+## How it compares
+
+- vs. prettier-plugin-tailwindcss: Prettier's official plugin sorts classes into a
+  recommended order and trims exact duplicates/whitespace. It does not merge shorthand
+  combinations or canonicalize arbitrary values; that is NormWind's job. The two tools run
+  side by side without conflict.
+- vs. eslint-plugin-tailwindcss: its `enforces-shorthand` rule performs the same kind of
+  merge NormWind does, and NormWind's own shorthand-group data is sourced from this
+  plugin's utility-group definitions. The difference is setup: that ESLint rule requires
+  ESLint installed and a `cssConfigPath` pointed at your Tailwind CSS file. NormWind ships
+  as a zero-config, standalone CLI and GitHub Action, no ESLint required.
+
+## FAQ
+
+Is NormWind free? Yes, MIT-licensed, not affiliated with Tailwind Labs.
+
+Does NormWind require configuration? No. Zero-config: no rules file, no sort order, no
+opinions imposed on the repo.
+
+What does NormWind actually fix? Verbose utility combinations and non-canonical arbitrary
+values, per the two categories above.
+
+Which file types does NormWind support? 13 extensions: Vue, Svelte, Astro, HTML, HTM, JS,
+MJS, CJS, TS, JSX, TSX, MTS, CTS.
+
+Does it work with CI systems other than GitHub Actions? Yes: `npx @lunawerx/normwind
+--json` gives a stable exit code and machine-readable output for any CI provider.
+
+Can it fix code automatically? Yes, with `--fix` (markup-first) or `--fixall` (whole
+codebase); `--dry-run` previews either without writing to disk.
+
+Does NormWind work offline? Yes. It resolves the project's own Tailwind install or a
+bundled canonical snapshot; the only network use is the one-off npm/npx download.
+
+How is NormWind different from Prettier or eslint-plugin-tailwindcss? See "How it
+compares" above.
+
+## Limitations
+
+- On Tailwind 4.0, which predates the canonicalization API, NormWind audits and fixes
+  shorthand groups but deliberately leaves arbitrary values alone.
+- A conservative merge policy means an unusual class list can keep a merge NormWind could
+  not prove safe; that is the intended, safe outcome, not a bug.
+- `.normwindignore` is read on the CLI but not in GitHub Action mode, by design.
+
+## Links
+
+- Home: https://normwind.lunarwerx.com/
+- Source: https://github.com/LunarWerxs/NormWind
+- npm: https://www.npmjs.com/package/@lunawerx/normwind
+- GitHub Action: https://github.com/marketplace/actions/normwind-tailwind-audit
+- License: https://github.com/LunarWerxs/NormWind/blob/main/LICENSE
+- Pricing (machine-readable): https://normwind.lunarwerx.com/pricing.md
+- Parent studio: https://lunarwerx.com/
+
+Last updated: 2026-08-23.
