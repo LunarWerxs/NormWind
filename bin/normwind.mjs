@@ -522,39 +522,11 @@ async function loadCanonicalSnapshot() {
             const raw = await fs.readFile(snapshotPath, "utf8");
             const parsed = JSON.parse(raw);
 
-            if (
-                !parsed ||
-                parsed.source?.tailwindVersion !== tailwindPkg.version ||
-                !Array.isArray(parsed.replacements)
-            ) {
-                continue;
-            }
-            if (
-                expectedIndexCssPath &&
-                typeof parsed.source?.tailwindIndexCssPath === "string" &&
-                parsed.source.tailwindIndexCssPath !== expectedIndexCssPath
-            ) {
-                continue;
-            }
-            if (
-                parsed.source?.rootFontSizePx !== undefined &&
-                parsed.source.rootFontSizePx !== ROOT_FONT_SIZE_PX
-            ) {
+            if (!canonicalSnapshotMatchesExpectations(parsed, tailwindPkg, expectedIndexCssPath)) {
                 continue;
             }
 
-            for (const replacement of parsed.replacements) {
-                if (
-                    replacement &&
-                    isSafeCacheEntry(replacement.inputClass, replacement.canonicalClass)
-                ) {
-                    CANONICAL_MEMO.set(replacement.inputClass, replacement.canonicalClass);
-                    if (DYNAMIC_CACHE_KEYS.delete(replacement.inputClass)) {
-                        diskCacheDirty = true;
-                    }
-                }
-            }
-
+            applyCanonicalSnapshotReplacements(parsed.replacements);
             return true;
         } catch {
             // Try the next snapshot source.
@@ -562,6 +534,47 @@ async function loadCanonicalSnapshot() {
     }
 
     return false;
+}
+
+// A snapshot is usable only if it was produced by the same Tailwind version,
+// the same CSS entry point, and the same rem base as this run -- otherwise
+// its canonicalization results don't apply here.
+function canonicalSnapshotMatchesExpectations(parsed, tailwindPkg, expectedIndexCssPath) {
+    if (
+        !parsed ||
+        parsed.source?.tailwindVersion !== tailwindPkg.version ||
+        !Array.isArray(parsed.replacements)
+    ) {
+        return false;
+    }
+    if (
+        expectedIndexCssPath &&
+        typeof parsed.source?.tailwindIndexCssPath === "string" &&
+        parsed.source.tailwindIndexCssPath !== expectedIndexCssPath
+    ) {
+        return false;
+    }
+    if (
+        parsed.source?.rootFontSizePx !== undefined &&
+        parsed.source.rootFontSizePx !== ROOT_FONT_SIZE_PX
+    ) {
+        return false;
+    }
+    return true;
+}
+
+function applyCanonicalSnapshotReplacements(replacements) {
+    for (const replacement of replacements) {
+        if (
+            replacement &&
+            isSafeCacheEntry(replacement.inputClass, replacement.canonicalClass)
+        ) {
+            CANONICAL_MEMO.set(replacement.inputClass, replacement.canonicalClass);
+            if (DYNAMIC_CACHE_KEYS.delete(replacement.inputClass)) {
+                diskCacheDirty = true;
+            }
+        }
+    }
 }
 
 // Invalidate the in-memory cache if the Tailwind version on disk doesn't match
@@ -683,6 +696,123 @@ function buildThemeVarCacheKey(rawToken, themeCssHash) {
     return `${THEME_VAR_CACHE_PREFIX}${rawToken}`;
 }
 
+// Build a map: forwarded-root-var (e.g. `--md-sys-color-outline-variant`)
+// -> Tailwind theme key (e.g. `--color-outline-variant`).
+// Only single-step forwarders of the form `var(--x)` (with optional
+// whitespace) are eligible. Anything more complex is skipped to keep
+// the equivalence check trivial.
+function buildForwardedToThemeKeyMap(designSystem) {
+    const forwardedToThemeKey = new Map();
+    for (const [key, entry] of designSystem.theme.values.entries()) {
+        if (!entry || typeof entry.value !== "string") continue;
+        const m = /^\s*var\(\s*(--[a-z0-9-]+)\s*\)\s*$/i.exec(entry.value);
+        if (!m) continue;
+        const forwarded = m[1];
+        if (forwardedToThemeKey.has(forwarded)) {
+            // Multiple theme vars forward to the same root var -- ambiguous.
+            forwardedToThemeKey.set(forwarded, null);
+        } else {
+            forwardedToThemeKey.set(forwarded, key);
+        }
+    }
+    return forwardedToThemeKey;
+}
+
+// Build a quick lookup: theme key -> the single var() it forwards
+// to (e.g. "--color-outline-variant" -> "--md-sys-color-outline-variant").
+// Only single-var forwarders are stored, matching the population logic
+// above. Used by the equivalence check to verify the candidate CSS
+// differs from the original only by substituting `var(--themeKey)`
+// for `var(--forwarded)`.
+function buildThemeKeyToForwardedMap(forwardedToThemeKey) {
+    const themeKeyToForwarded = new Map();
+    for (const [forwarded, themeKey] of forwardedToThemeKey.entries()) {
+        if (typeof themeKey === "string") {
+            themeKeyToForwarded.set(themeKey, forwarded);
+        }
+    }
+    return themeKeyToForwarded;
+}
+
+// The resolver returned by getThemeVarResolver(). Pulled out to a top-level
+// function (instead of a closure literal) so its own branches are scored on
+// their own nesting, not stacked on top of the async IIFE that builds it.
+function resolveThemeVarToken(rawToken, { designSystem, forwardedToThemeKey, themeKeyToForwarded, themeCssHash }) {
+    if (!rawToken || typeof rawToken !== "string") return rawToken;
+
+    const cacheKey = buildThemeVarCacheKey(rawToken, themeCssHash);
+    const cached = CANONICAL_MEMO.get(cacheKey);
+    if (cached !== undefined) {
+        return cached === "" ? rawToken : cached;
+    }
+
+    const recordMiss = () => {
+        CANONICAL_MEMO.set(cacheKey, "");
+        DYNAMIC_CACHE_KEYS.add(cacheKey);
+        diskCacheDirty = true;
+        return rawToken;
+    };
+
+    const token = parseFixToken(rawToken);
+    const parsed = extractParenVarName(token.utility);
+    if (!parsed) return recordMiss();
+
+    // Resolve `parsed.varName` to a Tailwind theme key. Two pathways:
+    //   1. Forwarder pattern: user authored a root var that the design
+    //      system forwards from a Tailwind-namespaced theme var
+    //      (`--color-x: var(--md-sys-color-x)` -> author writes
+    //      `--md-sys-color-x`, theme key is `--color-x`).
+    //   2. Direct pattern: user authored the theme key itself
+    //      (`--color-ink-400` is registered in @theme; author writes
+    //      `border-(--color-ink-400)`, theme key is `--color-ink-400`).
+    // Both reduce to "theme key whose namespace prefix is dropped to
+    // form the named-utility fragment". The Tailwind-generated CSS
+    // body is byte-identical for both forms when the candidate is
+    // valid, and `candidatesToCss` returns undefined when the
+    // candidate is not a valid utility -- so the equivalence check
+    // is the safety gate for both pathways.
+    let themeKey = forwardedToThemeKey.get(parsed.varName);
+    if (!themeKey || typeof themeKey !== "string") {
+        const direct = designSystem.theme.values.get(parsed.varName);
+        if (direct && typeof direct.value === "string") {
+            themeKey = parsed.varName;
+        }
+    }
+    if (!themeKey || typeof themeKey !== "string") return recordMiss();
+
+    // Theme keys look like `--<namespace>-<fragment>`. Drop the
+    // namespace to get the fragment used in named utility classes.
+    const fragmentMatch = /^--[a-z0-9]+-(.+)$/i.exec(themeKey);
+    if (!fragmentMatch) return recordMiss();
+    const fragment = fragmentMatch[1];
+    if (!fragment) return recordMiss();
+
+    const candidateUtility = `${parsed.utilityPrefix}-${fragment}${parsed.modifier}`;
+    const candidateRaw = buildFixToken({
+        variants: token.variants,
+        utility: candidateUtility,
+        important: token.important,
+    });
+
+    let originalCss;
+    let candidateCss;
+    try {
+        originalCss = designSystem.candidatesToCss([token.raw])?.[0] ?? "";
+        candidateCss = designSystem.candidatesToCss([candidateRaw])?.[0] ?? "";
+    } catch {
+        return recordMiss();
+    }
+    if (!originalCss || !candidateCss) return recordMiss();
+    if (!cssRuleBodiesAreEquivalent(originalCss, candidateCss, themeKeyToForwarded)) {
+        return recordMiss();
+    }
+
+    CANONICAL_MEMO.set(cacheKey, candidateRaw);
+    DYNAMIC_CACHE_KEYS.add(cacheKey);
+    diskCacheDirty = true;
+    return candidateRaw;
+}
+
 async function getThemeVarResolver({ themeCssPath = null } = {}) {
     // If the caller passes a different themeCssPath than the cached one, drop
     // the cached resolver so we rebuild against the new design system.
@@ -700,113 +830,11 @@ async function getThemeVarResolver({ themeCssPath = null } = {}) {
             const themeCssHash = augmented.themeCssHash || null;
             activeThemeCssHash = themeCssHash;
 
-            // Build a map: forwarded-root-var (e.g. `--md-sys-color-outline-variant`)
-            // -> Tailwind theme key (e.g. `--color-outline-variant`).
-            // Only single-step forwarders of the form `var(--x)` (with optional
-            // whitespace) are eligible. Anything more complex is skipped to keep
-            // the equivalence check trivial.
-            const forwardedToThemeKey = new Map();
-            for (const [key, entry] of designSystem.theme.values.entries()) {
-                if (!entry || typeof entry.value !== "string") continue;
-                const m = /^\s*var\(\s*(--[a-z0-9-]+)\s*\)\s*$/i.exec(entry.value);
-                if (!m) continue;
-                const forwarded = m[1];
-                if (forwardedToThemeKey.has(forwarded)) {
-                    // Multiple theme vars forward to the same root var -- ambiguous.
-                    forwardedToThemeKey.set(forwarded, null);
-                } else {
-                    forwardedToThemeKey.set(forwarded, key);
-                }
-            }
+            const forwardedToThemeKey = buildForwardedToThemeKeyMap(designSystem);
+            const themeKeyToForwarded = buildThemeKeyToForwardedMap(forwardedToThemeKey);
 
-            // Build a quick lookup: theme key -> the single var() it forwards
-            // to (e.g. "--color-outline-variant" -> "--md-sys-color-outline-variant").
-            // Only single-var forwarders are stored, matching the population logic
-            // above. Used by the equivalence check to verify the candidate CSS
-            // differs from the original only by substituting `var(--themeKey)`
-            // for `var(--forwarded)`.
-            const themeKeyToForwarded = new Map();
-            for (const [forwarded, themeKey] of forwardedToThemeKey.entries()) {
-                if (typeof themeKey === "string") {
-                    themeKeyToForwarded.set(themeKey, forwarded);
-                }
-            }
-
-            return (rawToken) => {
-                if (!rawToken || typeof rawToken !== "string") return rawToken;
-
-                const cacheKey = buildThemeVarCacheKey(rawToken, themeCssHash);
-                const cached = CANONICAL_MEMO.get(cacheKey);
-                if (cached !== undefined) {
-                    return cached === "" ? rawToken : cached;
-                }
-
-                const recordMiss = () => {
-                    CANONICAL_MEMO.set(cacheKey, "");
-                    DYNAMIC_CACHE_KEYS.add(cacheKey);
-                    diskCacheDirty = true;
-                    return rawToken;
-                };
-
-                const token = parseFixToken(rawToken);
-                const parsed = extractParenVarName(token.utility);
-                if (!parsed) return recordMiss();
-
-                // Resolve `parsed.varName` to a Tailwind theme key. Two pathways:
-                //   1. Forwarder pattern: user authored a root var that the design
-                //      system forwards from a Tailwind-namespaced theme var
-                //      (`--color-x: var(--md-sys-color-x)` -> author writes
-                //      `--md-sys-color-x`, theme key is `--color-x`).
-                //   2. Direct pattern: user authored the theme key itself
-                //      (`--color-ink-400` is registered in @theme; author writes
-                //      `border-(--color-ink-400)`, theme key is `--color-ink-400`).
-                // Both reduce to "theme key whose namespace prefix is dropped to
-                // form the named-utility fragment". The Tailwind-generated CSS
-                // body is byte-identical for both forms when the candidate is
-                // valid, and `candidatesToCss` returns undefined when the
-                // candidate is not a valid utility -- so the equivalence check
-                // is the safety gate for both pathways.
-                let themeKey = forwardedToThemeKey.get(parsed.varName);
-                if (!themeKey || typeof themeKey !== "string") {
-                    const direct = designSystem.theme.values.get(parsed.varName);
-                    if (direct && typeof direct.value === "string") {
-                        themeKey = parsed.varName;
-                    }
-                }
-                if (!themeKey || typeof themeKey !== "string") return recordMiss();
-
-                // Theme keys look like `--<namespace>-<fragment>`. Drop the
-                // namespace to get the fragment used in named utility classes.
-                const fragmentMatch = /^--[a-z0-9]+-(.+)$/i.exec(themeKey);
-                if (!fragmentMatch) return recordMiss();
-                const fragment = fragmentMatch[1];
-                if (!fragment) return recordMiss();
-
-                const candidateUtility = `${parsed.utilityPrefix}-${fragment}${parsed.modifier}`;
-                const candidateRaw = buildFixToken({
-                    variants: token.variants,
-                    utility: candidateUtility,
-                    important: token.important,
-                });
-
-                let originalCss;
-                let candidateCss;
-                try {
-                    originalCss = designSystem.candidatesToCss([token.raw])?.[0] ?? "";
-                    candidateCss = designSystem.candidatesToCss([candidateRaw])?.[0] ?? "";
-                } catch {
-                    return recordMiss();
-                }
-                if (!originalCss || !candidateCss) return recordMiss();
-                if (!cssRuleBodiesAreEquivalent(originalCss, candidateCss, themeKeyToForwarded)) {
-                    return recordMiss();
-                }
-
-                CANONICAL_MEMO.set(cacheKey, candidateRaw);
-                DYNAMIC_CACHE_KEYS.add(cacheKey);
-                diskCacheDirty = true;
-                return candidateRaw;
-            };
+            return (rawToken) =>
+                resolveThemeVarToken(rawToken, { designSystem, forwardedToThemeKey, themeKeyToForwarded, themeCssHash });
         })();
     }
     return themeVarResolverPromise;
@@ -1146,6 +1174,51 @@ const VALUE_FLAGS = new Set(["--ignore", "--reporter", "--theme-css"]);
 const REPEATABLE_VALUE_FLAGS = new Set(["--ignore"]);
 const REPORTERS = new Set(["text", "json", "sarif"]);
 
+// Handles one `--`-prefixed CLI token: `--key=value`, `--key value`, or a
+// bare flag. Returns true when it consumed `nextArg` as a value, so the
+// caller's loop index can skip past it.
+function handleLongFlagArg(arg, nextArg, { flags, unknownFlags, missingValueFlags, recordValue }) {
+    // Support `--key=value` and `--key value` for value-bearing flags.
+    const eqIdx = arg.indexOf("=");
+    if (eqIdx > 0) {
+        const key = arg.slice(0, eqIdx);
+        if (!KNOWN_FLAGS.has(key)) {
+            unknownFlags.push(key);
+            return false;
+        }
+        recordValue(key, arg.slice(eqIdx + 1));
+        return false;
+    }
+
+    if (!KNOWN_FLAGS.has(arg)) {
+        unknownFlags.push(arg);
+        return false;
+    }
+
+    if (VALUE_FLAGS.has(arg)) {
+        if (nextArg !== undefined && !nextArg.startsWith("-")) {
+            recordValue(arg, nextArg);
+            return true;
+        }
+        missingValueFlags.push(arg);
+        return false;
+    }
+
+    flags.add(arg);
+    return false;
+}
+
+// Single-dash aliases (-h, -v). Anything else starting with "-" is a
+// typo'd flag, not a file pattern, so surface it instead of silently
+// scanning nothing.
+function handleShortFlagArg(arg, { flags, unknownFlags }) {
+    if (KNOWN_FLAGS.has(arg)) {
+        flags.add(arg);
+    } else {
+        unknownFlags.push(arg);
+    }
+}
+
 function parseArgs(argv) {
     const flags = new Set();
     const patterns = [];
@@ -1162,6 +1235,7 @@ function parseArgs(argv) {
         }
         flags.add(key);
     };
+    const flagCtx = { flags, unknownFlags, missingValueFlags, recordValue };
 
     for (let i = 0; i < argv.length; i += 1) {
         const arg = argv[i];
@@ -1179,46 +1253,14 @@ function parseArgs(argv) {
         }
 
         if (arg.startsWith("--")) {
-            // Support `--key=value` and `--key value` for value-bearing flags.
-            const eqIdx = arg.indexOf("=");
-            if (eqIdx > 0) {
-                const key = arg.slice(0, eqIdx);
-                if (!KNOWN_FLAGS.has(key)) {
-                    unknownFlags.push(key);
-                    continue;
-                }
-                recordValue(key, arg.slice(eqIdx + 1));
-                continue;
+            if (handleLongFlagArg(arg, argv[i + 1], flagCtx)) {
+                i += 1;
             }
-
-            if (!KNOWN_FLAGS.has(arg)) {
-                unknownFlags.push(arg);
-                continue;
-            }
-
-            if (VALUE_FLAGS.has(arg)) {
-                if (i + 1 < argv.length && !argv[i + 1].startsWith("-")) {
-                    recordValue(arg, argv[i + 1]);
-                    i += 1;
-                } else {
-                    missingValueFlags.push(arg);
-                }
-                continue;
-            }
-
-            flags.add(arg);
             continue;
         }
 
-        // Single-dash aliases (-h, -v). Anything else starting with "-" is a
-        // typo'd flag, not a file pattern, so surface it instead of silently
-        // scanning nothing.
         if (arg.startsWith("-") && arg.length > 1) {
-            if (KNOWN_FLAGS.has(arg)) {
-                flags.add(arg);
-            } else {
-                unknownFlags.push(arg);
-            }
+            handleShortFlagArg(arg, flagCtx);
             continue;
         }
 
@@ -3570,6 +3612,108 @@ async function walkDirectory(directoryPath, results, visitedRealPaths = new Set(
     }
 }
 
+// Classifies one CLI target pattern into exactly one of the three buckets
+// listTargetFiles collects: an explicit lintable file, a directory to walk,
+// or a glob to resolve later. Mutates the passed-in collections so the
+// caller's loop stays a flat, single-purpose iteration.
+async function classifyTargetPattern(pattern, { explicitFiles, directoryTargets, globPatterns }) {
+    validateActionPattern(pattern);
+    if (hasGlobSyntax(pattern)) {
+        // ripgrep treats a backslash as an escape character, not a path
+        // separator, while the fallback walker's globPatternToRegExp
+        // normalized it. `normwind "src\**\*.vue"` therefore matched a
+        // different set depending on whether rg happened to be installed.
+        // Normalize once, here, so both consumers see the same string.
+        globPatterns.push(pattern.replace(/\\/g, "/"));
+        return;
+    }
+
+    const resolved = path.resolve(process.cwd(), pattern);
+    let stats = null;
+    let targetPath = resolved;
+    let linkStats;
+    try {
+        linkStats = await fs.lstat(resolved);
+    } catch {
+        globPatterns.push(pattern);
+        return;
+    }
+    if (ACTION_WORKSPACE_ROOT && linkStats.isSymbolicLink()) {
+        targetPath = await resolveActionSafePath(resolved, `target "${pattern}"`);
+        stats = await fs.stat(targetPath);
+        if (stats.isDirectory()) {
+            throw new Error(`normwinds: Action mode refuses directory symlink target: ${pattern}`);
+        }
+    } else {
+        stats = await fs.stat(resolved);
+    }
+
+    if (stats.isDirectory()) {
+        directoryTargets.push(targetPath);
+        return;
+    }
+
+    if (stats.isFile()) {
+        const relativePath = normalizeRelativePath(targetPath);
+        if (!isIgnoredRelativePath(relativePath) && hasAllowedExtension(relativePath)) {
+            explicitFiles.add(path.resolve(targetPath));
+        }
+    }
+}
+
+// Adds every lintable file discovered from `filePaths` into `discoveredFiles`,
+// applying the shared ignore/extension filter. Shared by every discovery
+// path below (ripgrep glob results, the fallback walker, directory targets,
+// the no-pattern default) so the filter can't drift between them.
+function addLintableFiles(filePaths, discoveredFiles) {
+    for (const filePath of filePaths) {
+        const relativePath = normalizeRelativePath(filePath);
+        if (!isIgnoredRelativePath(relativePath) && hasAllowedExtension(relativePath)) {
+            discoveredFiles.add(path.resolve(filePath));
+        }
+    }
+}
+
+async function resolveGlobPatternTargets(globPatterns, discoveredFiles) {
+    try {
+        const files = await listFilesWithRipgrep(globPatterns);
+        addLintableFiles(files, discoveredFiles);
+    } catch {
+        // ripgrep unavailable: walk the tree and apply the globs manually
+        // so the fallback discovers the same set rg would have.
+        const globRegexes = globPatterns.map(globPatternToRegExp);
+        const walkedFiles = [];
+        await walkDirectory(process.cwd(), walkedFiles);
+        for (const filePath of walkedFiles) {
+            const relativePath = normalizeRelativePath(filePath);
+            if (globRegexes.some((regex) => regex.test(relativePath))) {
+                discoveredFiles.add(path.resolve(filePath));
+            }
+        }
+    }
+}
+
+// Positional targets are a union. A directory must still contribute all of
+// its lintable files when a separate glob is supplied in the same command.
+async function addDirectoryTargetFiles(directoryTargets, discoveredFiles) {
+    for (const directoryPath of directoryTargets) {
+        const files = [];
+        await walkDirectory(directoryPath, files);
+        for (const filePath of files) {
+            discoveredFiles.add(path.resolve(filePath));
+        }
+    }
+}
+
+async function addDefaultDiscoveredFiles(discoveredFiles) {
+    const files = await listFilesWithRipgrep(DEFAULT_PATTERNS).catch(async () => {
+        const walkedFiles = [];
+        await walkDirectory(process.cwd(), walkedFiles);
+        return walkedFiles;
+    });
+    addLintableFiles(files, discoveredFiles);
+}
+
 async function listTargetFiles(patterns) {
     const explicitFiles = new Set();
     const directoryTargets = [];
@@ -3578,101 +3722,21 @@ async function listTargetFiles(patterns) {
     const targetPatterns = patterns.length > 0 ? patterns : DEFAULT_PATTERNS;
 
     for (const pattern of targetPatterns) {
-        validateActionPattern(pattern);
-        if (hasGlobSyntax(pattern)) {
-            // ripgrep treats a backslash as an escape character, not a path
-            // separator, while the fallback walker's globPatternToRegExp
-            // normalized it. `normwind "src\**\*.vue"` therefore matched a
-            // different set depending on whether rg happened to be installed.
-            // Normalize once, here, so both consumers see the same string.
-            globPatterns.push(pattern.replace(/\\/g, "/"));
-            continue;
-        }
-
-        const resolved = path.resolve(process.cwd(), pattern);
-        let stats = null;
-        let targetPath = resolved;
-        let linkStats;
-        try {
-            linkStats = await fs.lstat(resolved);
-        } catch {
-            globPatterns.push(pattern);
-            continue;
-        }
-        if (ACTION_WORKSPACE_ROOT && linkStats.isSymbolicLink()) {
-            targetPath = await resolveActionSafePath(resolved, `target "${pattern}"`);
-            stats = await fs.stat(targetPath);
-            if (stats.isDirectory()) {
-                throw new Error(`normwinds: Action mode refuses directory symlink target: ${pattern}`);
-            }
-        } else {
-            stats = await fs.stat(resolved);
-        }
-
-        if (stats.isDirectory()) {
-            directoryTargets.push(targetPath);
-            continue;
-        }
-
-        if (stats.isFile()) {
-            const relativePath = normalizeRelativePath(targetPath);
-            if (!isIgnoredRelativePath(relativePath) && hasAllowedExtension(relativePath)) {
-                explicitFiles.add(path.resolve(targetPath));
-            }
-        }
+        await classifyTargetPattern(pattern, { explicitFiles, directoryTargets, globPatterns });
     }
 
     const discoveredFiles = new Set(explicitFiles);
 
     if (globPatterns.length > 0) {
-        try {
-            const files = await listFilesWithRipgrep(globPatterns);
-            for (const filePath of files) {
-                const relativePath = normalizeRelativePath(filePath);
-                if (!isIgnoredRelativePath(relativePath) && hasAllowedExtension(relativePath)) {
-                    discoveredFiles.add(path.resolve(filePath));
-                }
-            }
-        } catch {
-            // ripgrep unavailable: walk the tree and apply the globs manually
-            // so the fallback discovers the same set rg would have.
-            const globRegexes = globPatterns.map(globPatternToRegExp);
-            const walkedFiles = [];
-            await walkDirectory(process.cwd(), walkedFiles);
-            for (const filePath of walkedFiles) {
-                const relativePath = normalizeRelativePath(filePath);
-                if (globRegexes.some((regex) => regex.test(relativePath))) {
-                    discoveredFiles.add(path.resolve(filePath));
-                }
-            }
-        }
+        await resolveGlobPatternTargets(globPatterns, discoveredFiles);
     }
 
-    // Positional targets are a union. A directory must still contribute all of
-    // its lintable files when a separate glob is supplied in the same command.
     if (directoryTargets.length > 0) {
-        for (const directoryPath of directoryTargets) {
-            const files = [];
-            await walkDirectory(directoryPath, files);
-            for (const filePath of files) {
-                discoveredFiles.add(path.resolve(filePath));
-            }
-        }
+        await addDirectoryTargetFiles(directoryTargets, discoveredFiles);
     }
 
     if (globPatterns.length === 0 && directoryTargets.length === 0 && explicitFiles.size === 0) {
-        const files = await listFilesWithRipgrep(DEFAULT_PATTERNS).catch(async () => {
-            const walkedFiles = [];
-            await walkDirectory(process.cwd(), walkedFiles);
-            return walkedFiles;
-        });
-
-        for (const filePath of files) {
-            const relativePath = normalizeRelativePath(filePath);
-            if (!isIgnoredRelativePath(relativePath) && hasAllowedExtension(relativePath)) {
-                discoveredFiles.add(path.resolve(filePath));
-            }
-        }
+        await addDefaultDiscoveredFiles(discoveredFiles);
     }
 
     const sortedFiles = [...discoveredFiles].sort((a, b) => a.localeCompare(b));
