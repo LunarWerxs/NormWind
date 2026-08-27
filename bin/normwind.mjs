@@ -951,51 +951,61 @@ function buildMergeSafetyKey(before, after) {
 
 
 let mergeSafetyPromise = null;
+// Whether two winning-declaration maps describe the same computed CSS:
+// same property count and every property resolving to the same value.
+function declarationSetsEqual(beforeDeclarations, afterDeclarations) {
+    if (
+        !beforeDeclarations ||
+        !afterDeclarations ||
+        beforeDeclarations.size !== afterDeclarations.size
+    ) {
+        return false;
+    }
+    for (const [property, value] of beforeDeclarations) {
+        if (afterDeclarations.get(property) !== value) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function buildMergeSafetyChecker(designSystem) {
+    return (before, after) => {
+        const key = buildMergeSafetyKey(before, after);
+        if (key.length > MAX_MERGE_SAFETY_KEY_LENGTH) {
+            return false;
+        }
+        const cached = CANONICAL_MEMO.get(key);
+        if (cached !== undefined) {
+            return cached === "1";
+        }
+
+        const beforeDeclarations = winningDeclarations(designSystem, before);
+        const afterDeclarations = winningDeclarations(designSystem, after);
+        const safe = declarationSetsEqual(beforeDeclarations, afterDeclarations);
+
+        CANONICAL_MEMO.set(key, safe ? "1" : "0");
+        DYNAMIC_CACHE_KEYS.add(key);
+        diskCacheDirty = true;
+        return safe;
+    };
+}
+
+async function loadMergeSafetyChecker() {
+    validateCacheAgainstTailwindVersion();
+    const { designSystem } = await loadTailwindDesignSystem();
+    if (
+        typeof designSystem.getClassOrder !== "function" ||
+        typeof designSystem.candidatesToCss !== "function"
+    ) {
+        return null;
+    }
+    return buildMergeSafetyChecker(designSystem);
+}
+
 async function getMergeSafetyChecker() {
     if (!mergeSafetyPromise) {
-        mergeSafetyPromise = (async () => {
-            validateCacheAgainstTailwindVersion();
-            const { designSystem } = await loadTailwindDesignSystem();
-            if (
-                typeof designSystem.getClassOrder !== "function" ||
-                typeof designSystem.candidatesToCss !== "function"
-            ) {
-                return null;
-            }
-
-            return (before, after) => {
-                const key = buildMergeSafetyKey(before, after);
-                if (key.length > MAX_MERGE_SAFETY_KEY_LENGTH) {
-                    return false;
-                }
-                const cached = CANONICAL_MEMO.get(key);
-                if (cached !== undefined) {
-                    return cached === "1";
-                }
-
-                const beforeDeclarations = winningDeclarations(designSystem, before);
-                const afterDeclarations = winningDeclarations(designSystem, after);
-                let safe = false;
-                if (
-                    beforeDeclarations &&
-                    afterDeclarations &&
-                    beforeDeclarations.size === afterDeclarations.size
-                ) {
-                    safe = true;
-                    for (const [property, value] of beforeDeclarations) {
-                        if (afterDeclarations.get(property) !== value) {
-                            safe = false;
-                            break;
-                        }
-                    }
-                }
-
-                CANONICAL_MEMO.set(key, safe ? "1" : "0");
-                DYNAMIC_CACHE_KEYS.add(key);
-                diskCacheDirty = true;
-                return safe;
-            };
-        })();
+        mergeSafetyPromise = loadMergeSafetyChecker();
     }
     return mergeSafetyPromise;
 }
