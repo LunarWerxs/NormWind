@@ -328,6 +328,40 @@ function conciseError(stderr) {
     return text.length > 2_000 ? `${text.slice(0, 1_997)}...` : text;
 }
 
+function reportExecutionOutcome(execution, payload, failOnFindings) {
+    if (execution.exitCode === 2) {
+        core.setOutput("result", "error");
+        core.setFailed(conciseError(execution.stderr));
+        return true;
+    }
+    if (execution.exitCode !== 0 && execution.exitCode !== 1) {
+        core.setOutput("result", "error");
+        core.setFailed(`NormWind exited with unexpected code ${execution.exitCode}.`);
+        return true;
+    }
+    if (execution.exitCode === 0 && payload.findingCount !== 0) {
+        core.setOutput("result", "error");
+        core.setFailed("NormWind reported findings but exited successfully; refusing an inconsistent result.");
+        return true;
+    }
+    if (execution.exitCode === 1 && payload.findingCount === 0) {
+        core.setOutput("result", "error");
+        core.setFailed("NormWind exited for findings but returned an empty report; refusing an inconsistent result.");
+        return true;
+    }
+    if (payload.findingCount > 0) {
+        core.setOutput("result", "findings");
+        const message = `NormWind found ${payload.findingCount} normalization issue(s) across ${payload.lintedFiles} scanned file(s).`;
+        if (failOnFindings) {
+            core.setFailed(message);
+        } else {
+            core.notice(message);
+        }
+        return true;
+    }
+    return false;
+}
+
 export async function runAction() {
     try {
         const { workspace, workingDirectory } = await resolveWorkingDirectory();
@@ -392,35 +426,7 @@ export async function runAction() {
 
         await writeSummary(payload, findings, execution.exitCode, annotatedCount);
 
-        if (execution.exitCode === 2) {
-            core.setOutput("result", "error");
-            core.setFailed(conciseError(execution.stderr));
-            return;
-        }
-        if (execution.exitCode !== 0 && execution.exitCode !== 1) {
-            core.setOutput("result", "error");
-            core.setFailed(`NormWind exited with unexpected code ${execution.exitCode}.`);
-            return;
-        }
-        if (execution.exitCode === 0 && payload.findingCount !== 0) {
-            core.setOutput("result", "error");
-            core.setFailed("NormWind reported findings but exited successfully; refusing an inconsistent result.");
-            return;
-        }
-        if (execution.exitCode === 1 && payload.findingCount === 0) {
-            core.setOutput("result", "error");
-            core.setFailed("NormWind exited for findings but returned an empty report; refusing an inconsistent result.");
-            return;
-        }
-
-        if (payload.findingCount > 0) {
-            core.setOutput("result", "findings");
-            const message = `NormWind found ${payload.findingCount} normalization issue(s) across ${payload.lintedFiles} scanned file(s).`;
-            if (failOnFindings) {
-                core.setFailed(message);
-            } else {
-                core.notice(message);
-            }
+        if (reportExecutionOutcome(execution, payload, failOnFindings)) {
             return;
         }
 
