@@ -476,6 +476,8 @@ git commit -m "chore(deps): sync bun.lock and dist/ with the npm bump"
 git push
 ```
 
+`deps:sync` needs [Bun](https://bun.sh) on `PATH` for its first step; nothing else in the repo does, and CI never runs it. If you do not have Bun, ask someone who does to push the `bun.lock` half.
+
 Note that `npm test` chains its three suites with `&&`, so a stale `bun.lock` short-circuits before the bundle check ever runs. If you fix only the lockfile, expect the `dist/` failure to appear on the next push. `npm run deps:sync` does both at once for exactly this reason.
 
 </details>
