@@ -463,7 +463,7 @@ This repo commits **three** things that a dependency bump has to move together:
 | File | Written by | Enforced by |
 | --- | --- | --- |
 | `package.json` + `package-lock.json` | `npm` | `npm ci` in CI and the release workflow |
-| `bun.lock` | `bun` | prepush check *lockfiles agree on dependency versions* |
+| `bun.lock` | `bun` | prepush checks *lockfiles agree on dependency versions* (declared) and *lockfiles agree on the whole resolved tree* (transitive) |
 | `dist/index.mjs` + `dist/normwind.mjs` | `@vercel/ncc`, via `npm run build:action` | prepush check *action: committed bundle is current* |
 
 Dependabot only knows about the first row. It has no way to update the other two, and no Dependabot configuration can fix that: `bun.lock` and `package-lock.json` describe the *same* `package.json`, so adding a second `package-ecosystem` would just open a second, conflicting PR for every bump. **Every Dependabot PR therefore arrives red on purpose, and finishing it is a manual step:**
@@ -479,6 +479,30 @@ git push
 `deps:sync` needs [Bun](https://bun.sh) on `PATH` for its first step; nothing else in the repo does, and CI never runs it. If you do not have Bun, ask someone who does to push the `bun.lock` half.
 
 Note that `npm test` chains its three suites with `&&`, so a stale `bun.lock` short-circuits before the bundle check ever runs. If you fix only the lockfile, expect the `dist/` failure to appear on the next push. `npm run deps:sync` does both at once for exactly this reason.
+
+#### Security bumps on a *transitive* package need one extra step
+
+`deps:sync` is enough for anything Dependabot touches, because those are dependencies **declared** in `package.json`. It is **not** enough for a transitive one, which is what most advisories are:
+
+```bash
+npm audit fix                     # moves package-lock.json only
+bun update <name>                 # bun.lock needs to be told explicitly
+npm ci && npm run build:action    # then resync the tree and the bundle
+```
+
+The `bun install` inside `deps:sync` will **not** move a pin that still satisfies its range. When nanoid was patched for [GHSA-2v37-7h3g-55p8](https://github.com/advisories/GHSA-2v37-7h3g-55p8), `3.3.16` still satisfied its parent's `^3.3.16`, so `bun install` left the vulnerable copy in place while `npm ci` installed the fixed one. The *lockfiles agree on the whole resolved tree* check exists to catch precisely that.
+
+#### Resolving a `dist/` conflict during a rebase
+
+**Rebuild the bundle. Never take either side.**
+
+```bash
+git checkout --ours -- dist/ && npm run build:action && git add dist/
+```
+
+`dist/` is generated, so neither side of a conflict is authoritative and a textual merge of two minified bundles is meaningless. Taking one side *looks* like it worked and then ships a stale bundle: the *action: committed bundle is current* check will fail, but only on the commit that carries the stale copy, which may not be the one that looked conflicted.
+
+Note that the bundle can change even when the source edit appears to have no effect on it: removing a dead helper still changed the output, because it was the second user of a name and the minifier stopped emitting that name once it had one user left. Do not skip the rebuild because the diff looks irrelevant.
 
 </details>
 
