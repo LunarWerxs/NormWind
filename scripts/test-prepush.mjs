@@ -1020,6 +1020,11 @@ addCheck("lockfiles agree on dependency versions", async () => {
     // workflow) installs from; bun.lock is what local development uses. A
     // dependency bumped through one package manager must not leave the other
     // silently pinned to the old version.
+    //
+    // Dependabot only ever updates package.json + package-lock.json, so every
+    // one of its PRs lands here red until someone runs `npm run deps:sync`.
+    // That is the intended workflow, not a bug in this check -- see the
+    // "Updating dependencies" section of the README.
     const pkg = await readJson(path.join(REPO_ROOT, "package.json"));
     const declared = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
     const bunLock = await fs.readFile(path.join(REPO_ROOT, "bun.lock"), "utf8").catch(() => null);
@@ -1035,7 +1040,7 @@ addCheck("lockfiles agree on dependency versions", async () => {
         }
         assert(
             bunLock.includes(`"${name}@${exact}"`),
-            `bun.lock does not pin ${name}@${exact}; run \`bun install\` and commit the result`,
+            `bun.lock does not pin ${name}@${exact}; run \`npm run deps:sync\` and commit bun.lock (and dist/, if it changed)`,
         );
         const entry = npmLock.packages?.[`node_modules/${name}`];
         assert(

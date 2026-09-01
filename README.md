@@ -453,7 +453,30 @@ npm run test:regression:update   # update fixtures after an intentional change
 npm run test:compare             # live canonicalizer vs bundled snapshot
 npm run canonical:extract        # regenerate canonical replacement files
 npm run canonical:check          # verify canonical replacement files are current
+npm run deps:sync                # after a dependency bump: refresh bun.lock and rebuild dist/
 ```
+
+### Updating dependencies
+
+This repo commits **three** things that a dependency bump has to move together:
+
+| File | Written by | Enforced by |
+| --- | --- | --- |
+| `package.json` + `package-lock.json` | `npm` | `npm ci` in CI and the release workflow |
+| `bun.lock` | `bun` | prepush check *lockfiles agree on dependency versions* |
+| `dist/index.mjs` + `dist/normwind.mjs` | `@vercel/ncc`, via `npm run build:action` | prepush check *action: committed bundle is current* |
+
+Dependabot only knows about the first row. It has no way to update the other two, and no Dependabot configuration can fix that: `bun.lock` and `package-lock.json` describe the *same* `package.json`, so adding a second `package-ecosystem` would just open a second, conflicting PR for every bump. **Every Dependabot PR therefore arrives red on purpose, and finishing it is a manual step:**
+
+```bash
+gh pr checkout <number>
+npm run deps:sync
+git add bun.lock dist/            # only if they actually changed
+git commit -m "chore(deps): sync bun.lock and dist/ with the npm bump"
+git push
+```
+
+Note that `npm test` chains its three suites with `&&`, so a stale `bun.lock` short-circuits before the bundle check ever runs. If you fix only the lockfile, expect the `dist/` failure to appear on the next push. `npm run deps:sync` does both at once for exactly this reason.
 
 </details>
 
