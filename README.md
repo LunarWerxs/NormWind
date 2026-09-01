@@ -497,10 +497,12 @@ The `bun install` inside `deps:sync` will **not** move a pin that still satisfie
 **Rebuild the bundle. Never take either side.**
 
 ```bash
-git checkout --ours -- dist/ && npm run build:action && git add dist/
+npm run build:action && git add dist/
 ```
 
-`dist/` is generated, so neither side of a conflict is authoritative and a textual merge of two minified bundles is meaningless. Taking one side *looks* like it worked and then ships a stale bundle: the *action: committed bundle is current* check will fail, but only on the commit that carries the stale copy, which may not be the one that looked conflicted.
+`dist/` is generated, so neither side of a conflict is authoritative and a textual merge of two minified bundles is meaningless. Taking one side *looks* like it worked and then ships a stale bundle: the *action: committed bundle is current* check will fail, but only on the commit that carries the stale copy, which may not be the one that looked conflicted. That is precisely how it happened on `3fe92ad`, which went red on all seven CI legs.
+
+You should not have to remember this. `.gitattributes` marks `dist/**` as `-merge`, so git refuses to invent a merge result there: it conflicts, leaves the current branch's copy in place, and writes **no conflict markers**, so there is no half-merged bundle to commit by accident. The full rule lives in `.gitattributes` next to that line, and every staleness error from `build:action` repeats it.
 
 Note that the bundle can change even when the source edit appears to have no effect on it: removing a dead helper still changed the output, because it was the second user of a name and the minifier stopped emitting that name once it had one user left. Do not skip the rebuild because the diff looks irrelevant.
 

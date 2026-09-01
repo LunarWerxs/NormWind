@@ -61,11 +61,21 @@ async function listFiles(root) {
     return result;
 }
 
+// Appended to every staleness error. The single most common way dist/ goes
+// stale is a merge or rebase conflict "resolved" by keeping one side, which is
+// not a resolution: dist/ is generated, so neither side is authoritative. That
+// is what turned 3fe92ad red on all seven CI legs. See .gitattributes, which
+// carries the full rule and makes git refuse to invent a merge result here.
+const STALE_AFTER_MERGE_HINT =
+    "\n\nIf you just merged or rebased: dist/ is GENERATED, so a conflict here is never resolved "
+    + "by keeping either side. Rebuild it -- `npm run build:action && git add dist/` -- and note "
+    + "that the bundle can change even when the source edit looks irrelevant to it.";
+
 async function compareDirectories(expected, actual) {
     const expectedFiles = await listFiles(expected);
     const actualFiles = await listFiles(actual).catch(() => []);
     if (JSON.stringify(expectedFiles) !== JSON.stringify(actualFiles)) {
-        throw new Error(`Committed dist file list is stale. Expected ${expectedFiles.join(", ")}; found ${actualFiles.join(", ") || "nothing"}. Run npm run build:action.`);
+        throw new Error(`Committed dist file list is stale. Expected ${expectedFiles.join(", ")}; found ${actualFiles.join(", ") || "nothing"}. Run npm run build:action.${STALE_AFTER_MERGE_HINT}`);
     }
     for (const relative of expectedFiles) {
         const [left, right] = await Promise.all([
@@ -86,7 +96,8 @@ async function compareDirectories(expected, actual) {
                 `Committed dist/${relative} is stale at byte ${firstDifference}. `
                 + `generated=${digest(left)} committed=${digest(right)}; `
                 + `generated-context=${context(left)} committed-context=${context(right)}. `
-                + "Run npm run build:action.",
+                + "Run npm run build:action."
+                + STALE_AFTER_MERGE_HINT,
             );
         }
     }
