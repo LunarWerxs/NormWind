@@ -520,6 +520,21 @@ NormWind deliberately uses `eslint-plugin-tailwindcss`'s **static group data** i
 ## 📜 Changelog
 
 <details>
+<summary><strong>v3.8.1</strong>: 2026-09-03 · maintenance release, no change to scanning, fixing, or output</summary>
+
+<br/>
+
+**Nothing in this release changes what NormWind reports or how `--fix` behaves.** It is repository
+housekeeping, published so the packaged README matches the source. If you are on v3.8.0 there is no
+functional reason to upgrade.
+
+- **Dependency bump: `nanoid` 3.3.18** ([GHSA-2v37-7h3g-55p8](https://github.com/advisories/GHSA-2v37-7h3g-55p8)), reached through `eslint-plugin-tailwindcss` → `postcss`. **This is not a fix you were exposed to:** the advisory affects a package resolved on a `^3.3.x` range, so a fresh install of any recent NormWind already picked up the patched version, and the bundled Marketplace Action does not contain `nanoid` at all. The bump pins it in this repository's own lockfiles.
+- **Lockfile drift is now caught on transitive packages, not just declared ones** (development gate). This project keeps both an npm and a Bun lockfile, and the previous check only compared the dependencies named in `package.json`, where most advisories never land. The `nanoid` bump above is the worked example: `npm audit fix` moved one lockfile while the other stayed on the vulnerable version, silently, because the old pin still satisfied its range. The check now compares the full resolved set of both files.
+- **A merge conflict in the committed Action bundle must be resolved by rebuilding it**, never by taking either side. Both are stale by definition, since each was generated from a different source tree than the merged one. `.gitattributes` now marks `dist/**` as unmergeable so Git stops attempting a meaningless three-way merge of two single-line minified files, the build script repeats the rule in its staleness error, and the README documents it. A rebase that resolved this file in favour of the upstream copy is what turned CI red across all seven legs before v3.8.0.
+
+</details>
+
+<details>
 <summary><strong>v3.8.0</strong>: 2026-08-09 · merge-safety correctness fix, SARIF reporter, ignore files, broader scanning</summary>
 
 <br/>
