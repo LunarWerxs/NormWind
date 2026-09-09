@@ -12,6 +12,7 @@
 [![node](https://img.shields.io/node/v/@lunawerx/normwind?style=flat-square&label=node&color=04609f&labelColor=0a0e17)](https://nodejs.org)
 [![Tailwind CSS v4](https://img.shields.io/badge/Tailwind_CSS-v4-05b0dc?style=flat-square&logo=tailwindcss&logoColor=white&labelColor=0a0e17)](https://tailwindcss.com)
 [![license MIT](https://img.shields.io/badge/license-MIT-05b0dc?style=flat-square&labelColor=0a0e17)](https://opensource.org/licenses/MIT)
+[![Discord](https://img.shields.io/badge/Discord-join_the_community-5865F2?style=flat-square&logo=discord&logoColor=white&labelColor=0a0e17)](https://discord.gg/PsWpeNUzhk)
 
 <strong>Normalize Tailwinds.</strong><br/>
 A zero-config CLI and GitHub Action that finds bloated Tailwind utility classes and rewrites them into their short, canonical form.
