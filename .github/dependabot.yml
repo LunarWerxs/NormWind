@@ -17,8 +17,11 @@ updates:
           - minor
           - patch
     ignore:
-      # Babel 8 requires Node >=22.18. NormWind's floor is >=22 since 2026-09-10, so
-      # this hold is now about the 22.0-vs-22.18 gap only and is worth re-testing.
+      # @babel/parser 8 declares engines ^22.18.0 || >=24.11.0 (checked against the registry
+      # 2026-09-10, v8.0.5). NormWind's floor is >=22, so taking it would ship users a runtime
+      # dependency that says it does not support the range we advertise - Node 22.0-22.17 and
+      # 24.0-24.10 both fall in the hole. Dropping Node 20 did NOT unblock this; the hold now
+      # rests on that gap and ends only if the floor moves again.
       - dependency-name: "@babel/parser"
         update-types:
           - version-update:semver-major
