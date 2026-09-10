@@ -742,7 +742,7 @@ By default, running `normwind` only audits and reports findings; it never writes
 No. NormWind runs entirely against your local files and your project's installed Tailwind engine; it needs no API token or account. The GitHub Action bundles NormWind, Tailwind, and Babel itself, installs nothing on the runner, and strips inherited secrets from its scanner process, so it has no documented path to send code out during a scan.
 
 **What are the system requirements?**
-NormWind requires Node.js 20 or later, per its `package.json` engines field. It works against Tailwind CSS v4 projects: full shorthand and arbitrary-value canonicalization on Tailwind 4.1 through 4.3, and shorthand-only auditing on 4.0, since that release doesn't expose the canonicalization API NormWind depends on for arbitrary values.
+NormWind requires Node.js 22 or later, per its `package.json` engines field. Node 20 was dropped on 2026-09-10, after it reached end-of-life on 2026-04-30 and stopped receiving security patches. It works against Tailwind CSS v4 projects: full shorthand and arbitrary-value canonicalization on Tailwind 4.1 through 4.3, and shorthand-only auditing on 4.0, since that release doesn't expose the canonicalization API NormWind depends on for arbitrary values.
 
 **Does it support Tailwind CSS v3?**
 The repo documents support for Tailwind CSS v4 only, spanning 4.0 through the bundled 4.3.3. Arbitrary-value canonicalization relies on Tailwind's `designSystem.canonicalizeCandidates` engine, a v4 API. No v3 compatibility is documented in the README or changelog, so treat NormWind as a v4-only tool unless a future release states otherwise.

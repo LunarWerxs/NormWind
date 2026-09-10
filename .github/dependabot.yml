@@ -17,7 +17,8 @@ updates:
           - minor
           - patch
     ignore:
-      # Babel 8 requires Node >=22.18; NormWind still supports Node 20.
+      # Babel 8 requires Node >=22.18. NormWind's floor is >=22 since 2026-09-10, so
+      # this hold is now about the 22.0-vs-22.18 gap only and is worth re-testing.
       - dependency-name: "@babel/parser"
         update-types:
           - version-update:semver-major

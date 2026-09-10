@@ -6,7 +6,7 @@
 ## What it is
 
 NormWind is a zero-config CLI and GitHub Action, published as the npm package
-`@lunawerx/normwind` (current version 3.8.0, requires Node 20+), that audits Tailwind CSS
+`@lunawerx/normwind` (current version 3.8.0, requires Node 22+), that audits Tailwind CSS
 class strings for two kinds of noise and can safely rewrite them:
 
 1. Verbose utility combinations that Tailwind can express as shorthand, e.g.

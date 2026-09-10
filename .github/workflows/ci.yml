@@ -22,12 +22,16 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         # 24.x matches the runtime the Marketplace Action itself declares
         # (`using: node24` in action.yml).
-        node: [20.x, 22.x, 24.x]
+        #
+        # 20.x was dropped 2026-09-10: Node 20 went end-of-life on 2026-04-30, so it
+        # receives no security patches and testing it invited people onto it. The Action
+        # already ran on node24 and the release job on 22.x, which left this matrix as the
+        # only place still claiming 20 mattered. `engines` moved to >=22 with it, because
+        # a floor you do not test is not a support claim, it is a guess.
+        node: [22.x, 24.x]
         exclude:
           # Keep the matrix affordable: macOS only needs one Node to cover its
           # filesystem semantics, which is the reason it is here.
-          - os: macos-latest
-            node: 20.x
           - os: macos-latest
             node: 22.x
     steps:
