@@ -23,8 +23,8 @@ const execFileAsync = promisify(execFile);
 const REPO_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, "$1"), "..");
 const NODE_BIN = process.execPath;
 const NORMWIND_BIN = path.join(REPO_ROOT, "bin", "normwind.mjs");
-const REGRESSION_SCRIPT = path.join(REPO_ROOT, "scripts", "test-regression.mjs");
-const COMPARE_SCRIPT = path.join(REPO_ROOT, "scripts", "test-compare.mjs");
+const REGRESSION_SCRIPT = path.join(REPO_ROOT, "scripts", "check-regression.mjs");
+const COMPARE_SCRIPT = path.join(REPO_ROOT, "scripts", "check-compare.mjs");
 const SNAPSHOT_JSON = path.join(REPO_ROOT, "docs", "reference", "canonical-replacements.json");
 const SNAPSHOT_MD = path.join(REPO_ROOT, "docs", "reference", "canonical-replacements.md");
 
@@ -1139,7 +1139,7 @@ addCheck("npm pack dry-run", async () => {
     assert(files.has("docs/reference/canonical-replacements.json"), "pack is missing canonical JSON snapshot");
     assert(files.has("docs/reference/canonical-replacements.md"), "pack is missing canonical MD snapshot");
     assert(files.has("README.md"), "pack is missing README.md");
-    assert(!files.has("scripts/test-regression.mjs"), "pack should not include test scripts");
+    assert(!files.has("scripts/check-regression.mjs"), "pack should not include the check scripts");
     assert(!files.has("test/fixtures/family-shorthand/input.tsx"), "pack should not include test fixtures");
     const stragglers = [...files].filter((f) => /\.(bak|orig|swp|tmp)$/i.test(f));
     assert(stragglers.length === 0, `pack must not contain editor/refactor backups: ${stragglers.join(", ")}`);

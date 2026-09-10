@@ -30,13 +30,13 @@
     "canonical:extract": "node bin/normwind.mjs --extract-canonical --write-canonical-files",
     "canonical:check": "node bin/normwind.mjs --check-canonical",
     "deps:sync": "bun install && npm ci && npm run build:action",
-    "test": "node --test \"test/**/*.test.mjs\" && node scripts/test-prepush.mjs && node scripts/test-action.mjs",
+    "test": "node --test && node scripts/check-prepush.mjs && node scripts/check-action.mjs",
     "prepush": "npm test",
-    "test:action": "node scripts/test-action.mjs",
-    "test:regression": "node scripts/test-regression.mjs",
-    "test:regression:update": "node scripts/test-regression.mjs --update",
-    "test:compare": "node scripts/test-compare.mjs",
-    "test:units": "node --test \"test/**/*.test.mjs\""
+    "test:action": "node scripts/check-action.mjs",
+    "test:regression": "node scripts/check-regression.mjs",
+    "test:regression:update": "node scripts/check-regression.mjs --update",
+    "test:compare": "node scripts/check-compare.mjs",
+    "test:units": "node --test"
   },
   "engines": {
     "node": ">=20"

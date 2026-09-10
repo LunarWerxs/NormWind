@@ -569,7 +569,7 @@ async function main() {
 }
 
 main().catch((error) => {
-    console.error("test-action: fatal error");
+    console.error("check-action: fatal error");
     console.error(error);
     process.exitCode = 2;
 });
