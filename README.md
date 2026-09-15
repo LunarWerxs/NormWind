@@ -516,6 +516,8 @@ Note that the bundle can change even when the source edit appears to have no eff
 
 NormWind deliberately uses `eslint-plugin-tailwindcss`'s **static group data** instead of invoking the plugin's `enforces-shorthand` rule directly. Under Tailwind v4, the plugin's config path can return only `separator` and `prefix`, which prevents the rule from resolving many utility families. NormWind keeps the useful upstream group data while using its own Tailwind v4-compatible matcher and Tailwind's own v4 canonicalization engine, so you get the plugin's knowledge without its v4 blind spots.
 
+As of `eslint-plugin-tailwindcss` 4.x, that group table lives in NormWind's own tree (`lib/vendor/tailwind-classname-groups.mjs`, MIT-licensed, full notice in `THIRD-PARTY-NOTICES.md`) rather than being imported from the package at run time: v4 rewrote shorthand classification to query a live Tailwind engine through an internal worker and no longer ships or exports the static table, so this is a one-time snapshot of the last version (3.18.3) that had it. `eslint-plugin-tailwindcss` itself stays a declared dependency, bumped alongside the rest.
+
 </details>
 
 ## 📜 Changelog
@@ -725,7 +727,7 @@ Initial public release. Shorthand auditor and autofixer for Tailwind CSS utility
 NormWind sits next to two tools people already reach for when tidying Tailwind class strings, rather than replacing either:
 
 - **[`prettier-plugin-tailwindcss`](https://github.com/tailwindlabs/prettier-plugin-tailwindcss)** (Tailwind Labs' own Prettier plugin) sorts class names into Tailwind's recommended order. By its own documentation it does not merge shorthand combinations or rewrite arbitrary values. NormWind does the opposite job, and the two compose fine in the same project: let Prettier sort, let NormWind shorten.
-- **[`eslint-plugin-tailwindcss`](https://github.com/francoismassart/eslint-plugin-tailwindcss)**'s `enforces-shorthand` rule is an ESLint rule with its own autofix, and NormWind reuses its utility-group data rather than duplicating it (see "A note on Tailwind v4 & eslint-plugin-tailwindcss" above). But the rule runs inside an ESLint config, and under Tailwind v4 its config path can return only `separator` and `prefix`, which keeps it from resolving many utility families. NormWind runs standalone, as a CLI or GitHub Action, with no ESLint setup required, and also canonicalizes arbitrary values via Tailwind's own engine, which shorthand-focused linting doesn't cover.
+- **[`eslint-plugin-tailwindcss`](https://github.com/francoismassart/eslint-plugin-tailwindcss)**'s `enforces-shorthand` rule is an ESLint rule with its own autofix, and NormWind reuses its utility-group data (vendored, see "A note on Tailwind v4 & eslint-plugin-tailwindcss" above) rather than reimplementing it. But the rule runs inside an ESLint config, and under Tailwind v4 its config path can return only `separator` and `prefix`, which keeps it from resolving many utility families. NormWind runs standalone, as a CLI or GitHub Action, with no ESLint setup required, and also canonicalizes arbitrary values via Tailwind's own engine, which shorthand-focused linting doesn't cover.
 
 ## ❓ FAQ
 
@@ -742,7 +744,7 @@ By default, running `normwind` only audits and reports findings; it never writes
 No. NormWind runs entirely against your local files and your project's installed Tailwind engine; it needs no API token or account. The GitHub Action bundles NormWind, Tailwind, and Babel itself, installs nothing on the runner, and strips inherited secrets from its scanner process, so it has no documented path to send code out during a scan.
 
 **What are the system requirements?**
-NormWind requires Node.js 22 or later, per its `package.json` engines field. Node 20 was dropped on 2026-09-10, after it reached end-of-life on 2026-04-30 and stopped receiving security patches. It works against Tailwind CSS v4 projects: full shorthand and arbitrary-value canonicalization on Tailwind 4.1 through 4.3, and shorthand-only auditing on 4.0, since that release doesn't expose the canonicalization API NormWind depends on for arbitrary values.
+NormWind requires Node.js `^22.18.0` or `>=24.11.0`, per its `package.json` engines field (Node 22.0-22.17 and 24.0-24.10 fall in the gap). Node 20 was dropped on 2026-09-10, after it reached end-of-life on 2026-04-30 and stopped receiving security patches; the floor narrowed further on 2026-09-14 to match `@babel/parser` 8's own declared engines range. It works against Tailwind CSS v4 projects: full shorthand and arbitrary-value canonicalization on Tailwind 4.1 through 4.3, and shorthand-only auditing on 4.0, since that release doesn't expose the canonicalization API NormWind depends on for arbitrary values.
 
 **Does it support Tailwind CSS v3?**
 The repo documents support for Tailwind CSS v4 only, spanning 4.0 through the bundled 4.3.3. Arbitrary-value canonicalization relies on Tailwind's `designSystem.canonicalizeCandidates` engine, a v4 API. No v3 compatibility is documented in the README or changelog, so treat NormWind as a v4-only tool unless a future release states otherwise.

@@ -28,6 +28,11 @@ jobs:
         # already ran on node24 and the release job on 22.x, which left this matrix as the
         # only place still claiming 20 mattered. `engines` moved to >=22 with it, because
         # a floor you do not test is not a support claim, it is a guess.
+        #
+        # `engines` narrowed further to `^22.18.0 || >=24.11.0` on 2026-09-14, taking
+        # @babel/parser 8 (it declares that exact range). setup-node's `22.x`/`24.x`
+        # always resolve to each line's latest patch, which stays comfortably above
+        # both floors, so the matrix values didn't need to change, only this comment.
         node: [22.x, 24.x]
         exclude:
           # Keep the matrix affordable: macOS only needs one Node to cover its

@@ -2,7 +2,7 @@
 
 > A zero-config CLI and GitHub Action that finds bloated Tailwind utility classes and rewrites them into their short, canonical form. Every rewrite comes from Tailwind's own engine, never a stylistic guess.
 
-NormWind is an npm package (`@lunawerx/normwind`, node 22+) that audits Tailwind CSS class strings for two kinds of noise: verbose utility combinations like `px-4 py-4`, and arbitrary values that already have a canonical named utility like `rounded-[24px]`. It can report findings only or safely rewrite them, as a standalone CLI or as a first-party GitHub Action, with no rules file, no sort order, and no opinions imposed on the scanned repo.
+NormWind is an npm package (`@lunawerx/normwind`, node ^22.18.0 or >=24.11.0) that audits Tailwind CSS class strings for two kinds of noise: verbose utility combinations like `px-4 py-4`, and arbitrary values that already have a canonical named utility like `rounded-[24px]`. It can report findings only or safely rewrite them, as a standalone CLI or as a first-party GitHub Action, with no rules file, no sort order, and no opinions imposed on the scanned repo.
 
 ## Key facts
 - Zero config: no rules file, no sort order, no opinions imposed on your repo.

@@ -19,10 +19,12 @@
   "files": [
     "bin/normwind.mjs",
     "lib/*.mjs",
+    "lib/vendor/*.mjs",
     "docs/reference/canonical-replacements.json",
     "docs/reference/canonical-replacements.md",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.md"
   ],
   "scripts": {
     "build:action": "node scripts/build-action.mjs",
@@ -39,7 +41,7 @@
     "test:units": "node --test"
   },
   "engines": {
-    "node": ">=22"
+    "node": "^22.18.0 || >=24.11.0"
   },
   "keywords": [
     "tailwind",
@@ -58,8 +60,8 @@
     "class-normalization"
   ],
   "dependencies": {
-    "@babel/parser": "7.29.8",
-    "eslint-plugin-tailwindcss": "3.18.3",
+    "@babel/parser": "8.0.5",
+    "eslint-plugin-tailwindcss": "4.4.0",
     "tailwindcss": "4.3.3"
   },
   "publishConfig": {
