@@ -212,7 +212,13 @@ addCheck("bundled Tailwind supports workspace-confined theme imports", async () 
         files: {
             "src/Theme.vue": `<template>\n  <div class="border-(--md-sys-color-outline-variant)"></div>\n</template>\n`,
             "styles/theme.css": "@import './tokens.css';\n",
-            "styles/tokens.css": "@theme { --color-outline-variant: var(--md-sys-color-outline-variant); }\n",
+            // The fixture workspace defines the root token its theme forwards to, the way a
+            // real one does - a forward to a property nothing sets reads as a phantom.
+            "styles/tokens.css": [
+                ":root { --md-sys-color-outline-variant: #79747e; }",
+                "@theme { --color-outline-variant: var(--md-sys-color-outline-variant); }",
+                "",
+            ].join("\n"),
         },
         inputs: {
             "THEME-CSS": "styles/theme.css",
