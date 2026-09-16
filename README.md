@@ -434,7 +434,7 @@ The npm package intentionally publishes only runtime assets, brand assets, and r
 Tests and fixtures live in the source repo but are excluded from the packed tarball.
 
 <details>
-<summary><strong>🧑‍💻 Development &amp; maintainer commands</strong></summary>
+<summary><strong>🧑💻 Development &amp; maintainer commands</strong></summary>
 
 <br/>
 
