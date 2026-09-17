@@ -848,12 +848,12 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
         <div class="card">
           <div class="card-icon">P</div>
           <h3>vs. <code>prettier-plugin-tailwindcss</code></h3>
-          <p>Prettier's official Tailwind plugin sorts your classes into a recommended order and trims exact duplicates and stray whitespace. It doesn't merge <code class="cls">px-4 py-4</code> into <code class="cls">p-4</code> or turn <code class="cls">rounded-[24px]</code> into <code class="cls">rounded-3xl</code>, that's a different kind of rewrite. The two run side by side without conflict: Prettier orders, NormWind shortens.</p>
+          <p>Sorts classes into a recommended order and trims exact duplicates. It does not merge <code class="cls">px-4 py-4</code> into <code class="cls">p-4</code>, or <code class="cls">rounded-[24px]</code> into <code class="cls">rounded-3xl</code>. The two run side by side: Prettier orders, NormWind shortens.</p>
         </div>
         <div class="card deep">
           <div class="card-icon">E</div>
           <h3>vs. <code>eslint-plugin-tailwindcss</code></h3>
-          <p>Its <code class="cls">enforces-shorthand</code> rule does the same kind of merge NormWind does, and in fact NormWind's own shorthand groups are sourced from this plugin's utility-group data. The difference is setup: that rule needs ESLint installed and a <code class="cls">cssConfigPath</code> pointed at your Tailwind CSS file. NormWind ships the same data as a zero-config, standalone CLI and GitHub Action, no ESLint required.</p>
+          <p>Its <code class="cls">enforces-shorthand</code> rule does the same merge &mdash; NormWind's shorthand groups come from this plugin's data. The difference is setup: that rule needs ESLint and a <code class="cls">cssConfigPath</code>. NormWind ships the same data as a zero-config CLI and GitHub Action.</p>
         </div>
       </div>
     </div>
