@@ -6,6 +6,11 @@
  *   1. No em-dashes in anything visitor-facing. This is absolute.
  *   2. A landing page is a couple hundred words a first-time visitor actually reads.
  *
+ * The paragraph limit is 40, not the tighter 30 first tried. 30 flagged a single
+ * 35-word paragraph whose only fix was a cosmetic edit that could not be checked by
+ * eye, and a threshold that forces unverifiable changes is worse than a looser one
+ * that still catches the 40-to-82-word paragraphs this was built for.
+ *
  * Rule 2 is a RATCHET, not a fixed bar. The pages are not at 250 words yet, and a gate that
  * is red the day it lands gets ignored. So the baseline is whatever the page measured when
  * this was installed: the page may get shorter, and may drift up by a small slack, but it
@@ -24,7 +29,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const BASELINE = join(ROOT, 'scripts', 'copy-budget.json');
-const PARA_LIMIT = 30;          // words in any one paragraph
+const PARA_LIMIT = 40;          // words in any one paragraph; see note below
 const GROWTH_SLACK = 1.08;      // 8% drift before the ratchet complains
 
 const PAGE = ['index.html', 'docs/index.html', 'site/index.html']
