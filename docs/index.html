@@ -610,7 +610,7 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
       <div>
         <p class="eyebrow">@lunawerx/normwind · v3.8.0 · node 22+</p>
         <h1 id="hero-heading">Your Tailwind classes are longer <span class="accent">than Tailwind needs them to be.</span></h1>
-        <p class="hero-sub">A zero-config CLI and GitHub Action that finds bloated utility strings and rewrites them into their short, canonical form. No rules file, no sort order, no opinions imposed on your repo.</p>
+        <p class="hero-sub">A zero-config CLI and GitHub Action that rewrites bloated utility strings into their canonical short form.</p>
         <div class="hero-actions">
           <a class="btn btn-primary" href="https://www.npmjs.com/package/@lunawerx/normwind">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v13m0 0-4.5-4.5M12 16l4.5-4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 19.5h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
@@ -656,7 +656,7 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
       <div class="section-head">
         <p class="eyebrow">// at a glance</p>
         <h2 id="swaps-heading">Two kinds of noise, collapsed.</h2>
-        <p>Verbose utility combinations, and arbitrary values that Tailwind already has a name for. Both are found by an audit and both can be rewritten for you.</p>
+        <p>Verbose utility combinations, and arbitrary values Tailwind already names. Both are audited and both can be rewritten.</p>
       </div>
 
       <div class="swap-grid">
@@ -707,7 +707,7 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
         </ul>
         <div class="note">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11Z" stroke="currentColor" stroke-width="1.6"/></svg>
-          <p><b>On Tailwind 4.0</b>, which predates the canonicalization API, NormWind still audits and fixes shorthand groups and deliberately leaves arbitrary values alone rather than applying newer semantics to an older engine.</p>
+          <p><b>On Tailwind 4.0</b>, which predates the canonicalization API, it still fixes shorthand groups and leaves arbitrary values alone.</p>
         </div>
       </div>
 
@@ -742,17 +742,17 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
         <div class="card">
           <div class="card-icon">$</div>
           <h3><code>normwind</code></h3>
-          <p>Audit the current project and report every finding with its file and line. Exits <code class="cls">1</code> when there is anything to clean up, so it works as a gate without any extra flags.</p>
+          <p>Audits the project and reports every finding with file and line. Exits <code class="cls">1</code>, so it gates without extra flags.</p>
         </div>
         <div class="card">
           <div class="card-icon">✓</div>
           <h3><code>--fix</code></h3>
-          <p>The safe default. Rewrites <code class="cls">.vue</code> files, then re-runs the audit so you see what is left. Per-file fault isolation means one unparseable file cannot take the run down with it.</p>
+          <p>The safe default. Rewrites <code class="cls">.vue</code> files then re-audits, with per-file fault isolation.</p>
         </div>
         <div class="card deep">
           <div class="card-icon">↔</div>
           <h3><code>--fixall</code></h3>
-          <p>The whole codebase: Vue, JS, MJS, TS, JSX, and TSX. Same transforms, wider reach, for when you want the cleanup done in one pass.</p>
+          <p>The whole codebase &mdash; Vue, JS, MJS, TS, JSX, TSX. Same transforms, wider reach, one pass.</p>
         </div>
         <div class="card deep">
           <div class="card-icon">👁</div>
@@ -767,7 +767,7 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
         <div class="card">
           <div class="card-icon">◎</div>
           <h3>Scope it</h3>
-          <p>Pass a folder or a glob: <code class="cls">normwind src</code>, or <code class="cls">normwind "apps/web/**/*.{tsx,ts}"</code>. With no arguments it scans the project and skips <code class="cls">node_modules</code>, <code class="cls">dist</code>, and the usual build scratch.</p>
+          <p>Pass a folder or glob. With no arguments it scans the project and skips <code class="cls">node_modules</code> and build scratch.</p>
         </div>
       </div>
 
@@ -787,7 +787,7 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
       <div class="split-copy">
         <p class="eyebrow">// in ci</p>
         <h2 id="ci-heading">Utility bloat stops landing on main.</h2>
-        <p>There is a <a href="https://github.com/marketplace/actions/normwind-tailwind-audit" style="color:var(--cyan)">first-party GitHub Action</a> that annotates the pull request inline and fails it when findings exist. On any other provider it is one command, because the exit code already says everything.</p>
+        <p>A <a href="https://github.com/marketplace/actions/normwind-tailwind-audit" style="color:var(--cyan)">first-party GitHub Action</a> annotates the PR and fails it on findings. Elsewhere, one command.</p>
         <ul>
           <li>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="m5 12 5 5 9-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -841,19 +841,18 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
       <div class="section-head">
         <p class="eyebrow">// how it compares</p>
         <h2 id="compare-heading">NormWind vs. the tools you already run.</h2>
-        <p>NormWind isn't a replacement for your formatter or linter: it does a narrower job than either. Here's how it lines up against the two tools most Tailwind projects already have installed.</p>
       </div>
 
       <div class="compare-grid">
         <div class="card">
           <div class="card-icon">P</div>
           <h3>vs. <code>prettier-plugin-tailwindcss</code></h3>
-          <p>Sorts classes into a recommended order and trims exact duplicates. It does not merge <code class="cls">px-4 py-4</code> into <code class="cls">p-4</code>, or <code class="cls">rounded-[24px]</code> into <code class="cls">rounded-3xl</code>. The two run side by side: Prettier orders, NormWind shortens.</p>
+          <p>Sorts classes and trims duplicates, but does not merge <code class="cls">px-4 py-4</code> into <code class="cls">p-4</code>. Prettier orders, NormWind shortens.</p>
         </div>
         <div class="card deep">
           <div class="card-icon">E</div>
           <h3>vs. <code>eslint-plugin-tailwindcss</code></h3>
-          <p>Its <code class="cls">enforces-shorthand</code> rule does the same merge &mdash; NormWind's shorthand groups come from this plugin's data. The difference is setup: that rule needs ESLint and a <code class="cls">cssConfigPath</code>. NormWind ships the same data as a zero-config CLI and GitHub Action.</p>
+          <p>Its <code class="cls">enforces-shorthand</code> rule does the same merge, but needs ESLint and a <code class="cls">cssConfigPath</code>. NormWind is zero-config.</p>
         </div>
       </div>
     </div>
