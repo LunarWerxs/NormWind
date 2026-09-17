@@ -1,0 +1,28 @@
+name: copy budget
+
+# The landing page is the thing a stranger reads. This keeps two owner rules from drifting:
+# no em-dashes in visitor-facing copy, and the page does not quietly grow back after it was
+# cut. The word count is a ratchet against a recorded baseline, not a fixed bar, so it is
+# green today and can only get better.
+
+on:
+  push:
+    paths:
+      - '**/index.html'
+      - 'scripts/copy-budget.*'
+      - '.github/workflows/copy-budget.yml'
+  pull_request:
+    paths:
+      - '**/index.html'
+      - 'scripts/copy-budget.*'
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: node scripts/copy-budget.mjs
