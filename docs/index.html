@@ -357,6 +357,18 @@
   .faq-item>summary:hover{color:var(--cyan)}
   .faq-item>summary:focus-visible{outline:2px solid var(--cyan);outline-offset:-2px;border-radius:10px}
   .faq-a{padding:0 16px 15px;margin:0;color:var(--muted);line-height:1.6;max-width:72ch}
+
+  /* Progressive disclosure for the specialist half of the page: the heading and its one
+     line stay visible, the body is one click away. Nothing is removed from the DOM. */
+  details.more{margin-top:18px}
+  details.more>summary{display:inline-flex;align-items:center;gap:8px;cursor:pointer;
+    list-style:none;font:inherit;font-size:.92rem;font-weight:600;opacity:.75;
+    padding:7px 13px;border:1px solid currentColor;border-radius:999px;width:auto}
+  details.more>summary::-webkit-details-marker{display:none}
+  details.more>summary::after{content:"+";font-weight:700;line-height:1}
+  details.more[open]>summary::after{content:"\2013"}
+  details.more>summary:hover{opacity:1}
+  details.more[open]>summary{margin-bottom:18px}
 </style>
 <style>
 /* Back to the parent studio: a bare arrow at the top left of the page.
@@ -687,7 +699,8 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
         <p class="eyebrow">// why you can trust it</p>
         <h2 id="trust-heading">NormWind doesn't invent mappings.</h2>
         <p>Every "after" is something Tailwind itself considers equivalent to the "before". There is no heuristic and no house style in the middle.</p>
-        <ul>
+        <details class="more"><summary>Where the mappings come from</summary>
+<ul>
           <li>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="m5 12 5 5 9-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
             <span><b>Shorthand groups</b> come from <code class="cls">eslint-plugin-tailwindcss</code>'s utility-group definitions.</span>
@@ -709,6 +722,7 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11Z" stroke="currentColor" stroke-width="1.6"/></svg>
           <p><b>On Tailwind 4.0</b>, which predates the canonicalization API, it still fixes shorthand groups and leaves arbitrary values alone.</p>
         </div>
+</details>
       </div>
 
       <div class="code-window">
