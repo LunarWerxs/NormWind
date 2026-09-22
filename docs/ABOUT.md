@@ -58,7 +58,7 @@ edit the dossier, not this block. Everything ABOVE the marker is yours.
 - `lib/theme-vars.mjs` - Opt-in named-theme-variable resolution (--suggest-named-theme-vars / --theme-css), including the direct and forwarder @theme patterns.
 - `lib/workspace.mjs` - Package layout helpers and GitHub Action sandbox path confinement (assertInsideActionWorkspace).
 - `lib/concurrency.mjs` - A fixed-size async worker pool used to parallelize per-file scanning.
-- `scripts/` - Dev-facing build and test scripts: bundling the Action (build-action.mjs, ncc), unit/prepush/regression/comparison test runners, release.py.
+- `scripts/` - Dev-facing build and test scripts: bundling the Action (build-action.mjs, ncc), unit/prepush/regression/comparison test runners, release.py, and optimize_images.py (writes the small WebP/PNG copies the landing page loads from the PNG masters in docs/assets/).
 
 ### Features
 
