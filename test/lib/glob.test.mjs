@@ -13,24 +13,15 @@ test("a plain path is not a glob", () => {
     assert.ok(!hasGlobSyntax("src/App.vue"));
 });
 
-test("** spans directories", () => {
-    assert.ok(globPatternToRegExp("src/**/*.vue").test("src/a/b/C.vue"));
-});
-
-test("** also matches zero directories", () => {
-    assert.ok(globPatternToRegExp("src/**/*.vue").test("src/C.vue"));
+test("the documented glob syntax matches", () => {
+    assert.ok(globPatternToRegExp("src/**/*.vue").test("src/a/b/C.vue")); // ** spans directories
+    assert.ok(globPatternToRegExp("src/**/*.vue").test("src/C.vue")); // ...and zero of them
+    assert.ok(globPatternToRegExp("*.vue").test("a/b/C.vue")); // a bare pattern matches at any depth
+    assert.ok(globPatternToRegExp("*.{vue,tsx}").test("a/B.tsx")); // brace alternation
 });
 
 test("a rooted pattern does not match elsewhere", () => {
     assert.ok(!globPatternToRegExp("src/*.vue").test("other/C.vue"));
-});
-
-test("a bare pattern matches at any depth", () => {
-    assert.ok(globPatternToRegExp("*.vue").test("a/b/C.vue"));
-});
-
-test("brace alternation works", () => {
-    assert.ok(globPatternToRegExp("*.{vue,tsx}").test("a/B.tsx"));
 });
 
 test("brace alternation excludes others", () => {

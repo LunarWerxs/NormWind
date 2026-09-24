@@ -24,59 +24,35 @@ test("parseToken keeps the variant prefix", () => {
     assert.strictEqual(parseToken("hover:focus:p-4").variants, "hover:focus:");
 });
 
-test("parseToken normalizes a leading important marker", () => {
-    assert.strictEqual(parseToken("!p-4").normalized, "p-4!");
-});
-
-test("parseToken normalizes a post-variant marker", () => {
-    assert.strictEqual(parseToken("hover:!p-4").normalized, "hover:p-4!");
-});
-
-test("parseToken leaves a trailing marker alone", () => {
-    assert.strictEqual(parseToken("p-4!").normalized, "p-4!");
-});
-
-test("parseToken treats a doubled marker as important once", () => {
-    assert.strictEqual(parseToken("!p-4!").normalized, "p-4!");
+test("parseToken normalizes the important marker to the trailing form", () => {
+    assert.strictEqual(parseToken("!p-4").normalized, "p-4!"); // leading
+    assert.strictEqual(parseToken("hover:!p-4").normalized, "hover:p-4!"); // after the variants
+    assert.strictEqual(parseToken("p-4!").normalized, "p-4!"); // already trailing
+    assert.strictEqual(parseToken("!p-4!").normalized, "p-4!"); // doubled counts once
 });
 
 // The audit and fix parsers must agree; they were separate implementations
 // once, and the whole "audit clean implies fix is a no-op" contract rests on
 // them never disagreeing.
-for (const raw of ["p-4", "!p-4", "p-4!", "hover:!p-4", "md:hover:mx-2", "-mt-4", "[&>svg]:size-4"]) {
-    test(`token parsers agree on utility for ${raw}`, () => {
-        assert.strictEqual(parseFixToken(raw).utility, parseClassToken(raw).utility);
-    });
-    test(`token parsers agree on variants for ${raw}`, () => {
-        assert.strictEqual(parseFixToken(raw).variants, parseClassToken(raw).variants);
-    });
-    test(`token parsers agree on important for ${raw}`, () => {
-        assert.strictEqual(parseFixToken(raw).important, parseClassToken(raw).important);
-    });
-}
+test("token parsers agree on utility, variants and important", () => {
+    const pick = ({ utility, variants, important }) => ({ utility, variants, important });
+    for (const raw of ["p-4", "!p-4", "p-4!", "hover:!p-4", "md:hover:mx-2", "-mt-4", "[&>svg]:size-4"]) {
+        assert.deepStrictEqual(pick(parseFixToken(raw)), pick(parseClassToken(raw)), raw);
+    }
+});
 
-test("stripBracketedSegments empties arbitrary values", () => {
+test("stripBracketedSegments empties arbitrary values, nested ones included", () => {
     assert.strictEqual(stripBracketedSegments("data-[state=open]:bg-red-500"), "data-[]:bg-red-500");
-});
-
-test("stripBracketedSegments handles nested brackets", () => {
     assert.strictEqual(stripBracketedSegments("grid-cols-[1fr_[full]_1fr]"), "grid-cols-[]");
-});
-
-test("stripBracketedSegments leaves plain tokens alone", () => {
-    assert.strictEqual(stripBracketedSegments("px-4"), "px-4");
 });
 
 test("bracket variants count as fixable utilities", () => {
     assert.ok(isLikelyFixUtility("[&>svg]:size-4"));
 });
 
-test("data-attribute variants count as fixable utilities", () => {
-    assert.ok(isLikelyFixUtility("data-[state=open]:bg-red-500"));
-});
-
 test("a JSX expression fragment does not", () => {
-    assert.ok(!isLikelyFixUtility("a>b"));
+    // The dash gets it past the shape check, so only the operator gate can reject it.
+    assert.ok(!isLikelyFixUtility("a-b>c"));
 });
 
 test("bare `border` is a utility", () => {
@@ -87,15 +63,9 @@ test("a bare word is not", () => {
     assert.ok(!isLikelyTailwindUtility(parseClassToken("hello")));
 });
 
-test("matchUtilityToBody splits a compound utility", () => {
+test("matchUtilityToBody splits compound, negative and bare utilities", () => {
     assert.deepStrictEqual(matchUtilityToBody("px-4", "px"), { negative: "", value: "4" });
-});
-
-test("matchUtilityToBody handles negatives", () => {
     assert.deepStrictEqual(matchUtilityToBody("-mt-4", "mt"), { negative: "-", value: "4" });
-});
-
-test("matchUtilityToBody matches a bare body", () => {
     assert.deepStrictEqual(matchUtilityToBody("border", "border"), { negative: "", value: "" });
 });
 

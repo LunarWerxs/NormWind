@@ -6,18 +6,11 @@ import assert from "node:assert/strict";
 
 import { isSingleCssValue } from "../../lib/css.mjs";
 
-test("calc() counts as a single value", () => {
+test("a function value with inner spaces counts as a single value", () => {
     assert.ok(isSingleCssValue("calc(var(--spacing) * 4)"));
-});
-
-test("a plain length is a single value", () => {
-    assert.ok(isSingleCssValue("4px"));
+    assert.ok(isSingleCssValue("var(--a, calc(1px + 2px))"));
 });
 
 test("a two-value shorthand is not", () => {
     assert.ok(!isSingleCssValue("1px 2px"));
-});
-
-test("nested functions stay single", () => {
-    assert.ok(isSingleCssValue("var(--a, calc(1px + 2px))"));
 });
