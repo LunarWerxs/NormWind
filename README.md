@@ -138,7 +138,7 @@ It also catches arbitrary values that Tailwind's own design system can express a
 
 NormWind doesn't invent mappings:
 
-- **Shorthand groups** come straight from [`eslint-plugin-tailwindcss`](https://github.com/francoismassart/eslint-plugin-tailwindcss)'s Tailwind utility-group definitions.
+- **Shorthand merges** come from Tailwind itself when the engine supports it: `designSystem.canonicalizeCandidates(classes, { collapse: true })` replaces a set such as `mt-2 mr-2 mb-2 ml-2` with `m-2` only when the compiled CSS of the replacement matches the set's, so it covers every utility your Tailwind version knows. On an engine without that option, or when Tailwind cannot be loaded, NormWind falls back to [`eslint-plugin-tailwindcss`](https://github.com/francoismassart/eslint-plugin-tailwindcss)'s Tailwind utility-group definitions (set `NORMWIND_DISABLE_ENGINE_COLLAPSE=1` to force that table).
 - **Canonical values** come from Tailwind's own `designSystem.canonicalizeCandidates` engine.
 - **A merge is only applied when it cannot change the rendered CSS.** Tailwind emits utilities in its own order (broad before narrow, and same-utility candidates sorted by value), not in authoring order. Collapsing `ml-2 mr-2` into `mx-2` when the same class list already has `mx-8` would hand the win to `mx-8` and silently change the margin. So whenever another utility in the same group targets the same property at a different value, NormWind resolves the before and after class lists through Tailwind's own engine and compares the resulting declarations; if they differ at all, the merge is skipped. Skipping costs a suggestion; applying would cost a silent visual regression.
 
@@ -561,6 +561,8 @@ As of `eslint-plugin-tailwindcss` 4.x, that group table lives in NormWind's own 
 - **Per-file count baseline (`--baseline`, `--update-baseline`, Action `baseline` input)**: adopt NormWind in CI on a codebase that already has findings. A file may keep the findings it had when the baseline was recorded; a new one fails, and a count that drops fails until the baseline is lowered, so the debt only goes down. `--update-baseline` creates the file once and afterwards refuses to raise any count. See [Adopting on an existing codebase](#adopting-on-an-existing-codebase).
 
 - **Rewrite-precision gate** (development gate): a labelled corpus of must-rewrite and must-not-rewrite class strings now runs through the CLI on every `npm test`, and the suite fails when aggregate precision, recall, or false-positive rate crosses a fixed floor (`npm run test:precision`). Nothing about scanning or `--fix` changes.
+
+- **Shorthand merges now come from Tailwind's own collapse engine.** When the resolved Tailwind supports `canonicalizeCandidates(..., { collapse: true })`, each variant/important group of a class list is collapsed by Tailwind, which only swaps a set for a utility whose compiled CSS matches it. That reaches merges the vendored v3-era group table never listed and follows each Tailwind release. NormWind's render-safety proof still checks every merge against the rest of the class list, and any group the engine cannot answer (older engine, load failure, a merge the proof refuses) keeps the table's behaviour. Answers are cached with the other canonicalization results. `NORMWIND_DISABLE_ENGINE_COLLAPSE=1` forces the table.
 
 </details>
 
