@@ -1,0 +1,10 @@
+==== input.vue (1 finding) ====
+<template><div class="border-(--root-b) border-(--other)">x</div></template>
+                      ~~~~~~~~~~~~~~~~~
+!!! tailwindcss/enforces-shorthand: The class 'border-(--root-b)' can be written as 'border-middle'
+
+=== FIXED (--fix) ===
+<template><div class="border-middle border-(--other)">x</div></template>
+
+=== FIXED (--fixall) ===
+(same as --fix)

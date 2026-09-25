@@ -1,0 +1,43 @@
+==== input.tsx (3 findings) ====
+// Variant-prefixed shorthand:
+//   md:px-4 md:py-4 -> md:p-4
+//   hover:w-8 hover:h-8 -> hover:size-8
+//   dark:mt-2 dark:mb-2 -> dark:my-2
+
+export const ResponsivePadding = () => (
+    <div className="md:px-4 md:py-4">responsive padding</div>
+                    ~~~~~~~ ~~~~~~~
+!!! tailwindcss/enforces-shorthand: Classnames 'md:px-4, md:py-4' could be replaced by the 'md:p-4' shorthand!
+);
+
+export const HoverSize = () => (
+    <div className="hover:w-8 hover:h-8">hover size</div>
+                    ~~~~~~~~~ ~~~~~~~~~
+!!! tailwindcss/enforces-shorthand: Classnames 'hover:w-8, hover:h-8' could be replaced by the 'hover:size-8' shorthand!
+);
+
+export const DarkMargin = () => (
+    <div className="dark:mt-2 dark:mb-2">dark margin</div>
+                    ~~~~~~~~~ ~~~~~~~~~
+!!! tailwindcss/enforces-shorthand: Classnames 'dark:mt-2, dark:mb-2' could be replaced by the 'dark:my-2' shorthand!
+);
+
+=== FIXED (--fix) ===
+(unchanged)
+=== FIXED (--fixall) ===
+// Variant-prefixed shorthand:
+//   md:px-4 md:py-4 -> md:p-4
+//   hover:w-8 hover:h-8 -> hover:size-8
+//   dark:mt-2 dark:mb-2 -> dark:my-2
+
+export const ResponsivePadding = () => (
+    <div className="md:p-4">responsive padding</div>
+);
+
+export const HoverSize = () => (
+    <div className="hover:size-8">hover size</div>
+);
+
+export const DarkMargin = () => (
+    <div className="dark:my-2">dark margin</div>
+);

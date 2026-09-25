@@ -473,6 +473,8 @@ Other useful scripts:
 ```bash
 npm run test:regression          # run the regression fixtures
 npm run test:regression:update   # update fixtures after an intentional change
+                                 # (review each fixture's expected.golden.txt diff:
+                                 #  the input with ~~~ under every finding, then the fixed output)
 npm run test:compare             # live canonicalizer vs bundled snapshot
 npm run test:precision           # score the rewrite rules against the labelled corpus
 npm run canonical:extract        # regenerate canonical replacement files

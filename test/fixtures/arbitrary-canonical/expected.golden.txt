@@ -1,0 +1,25 @@
+==== input.vue (7 findings) ====
+<template>
+    <!-- arbitrary values that have a canonical named token -->
+    <div class="rounded-[24px] w-[100%] h-[1.5rem]"></div>
+                ~~~~~~~~~~~~~~ ~~~~~~~~ ~~~~~~~~~~
+!!! tailwindcss/enforces-shorthand: The class 'rounded-[24px]' can be written as 'rounded-3xl'
+!!! tailwindcss/enforces-shorthand: The class 'w-[100%]' can be written as 'w-full'
+!!! tailwindcss/enforces-shorthand: The class 'h-[1.5rem]' can be written as 'h-6'
+    <div class="p-[1rem] m-[8px] bg-[oklch(96.2%_0.059_95.617)] bg-[#FFF]"></div>
+                ~~~~~~~~ ~~~~~~~ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ~~~~~~~~~
+!!! tailwindcss/enforces-shorthand: The class 'p-[1rem]' can be written as 'p-4'
+!!! tailwindcss/enforces-shorthand: The class 'm-[8px]' can be written as 'm-2'
+!!! tailwindcss/enforces-shorthand: The class 'bg-[oklch(96.2%_0.059_95.617)]' can be written as 'bg-amber-100'
+!!! tailwindcss/enforces-shorthand: The class 'bg-[#FFF]' can be written as 'bg-white'
+</template>
+
+=== FIXED (--fix) ===
+<template>
+    <!-- arbitrary values that have a canonical named token -->
+    <div class="rounded-3xl w-full h-6"></div>
+    <div class="p-4 m-2 bg-amber-100 bg-white"></div>
+</template>
+
+=== FIXED (--fixall) ===
+(same as --fix)

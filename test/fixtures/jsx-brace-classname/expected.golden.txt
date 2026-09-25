@@ -1,0 +1,25 @@
+==== input.tsx (4 findings) ====
+export const Ternary = ({ active }: { active: boolean }) => (
+    <div className={active ? "px-4 py-4" : "pl-2 pr-2"}>ternary</div>
+                              ~~~~ ~~~~     ~~~~ ~~~~
+!!! tailwindcss/enforces-shorthand: Classnames 'px-4, py-4' could be replaced by the 'p-4' shorthand!
+!!! tailwindcss/enforces-shorthand: Classnames 'pl-2, pr-2' could be replaced by the 'px-2' shorthand!
+);
+
+export const TemplateLiteral = ({ size }: { size: number }) => (
+    <div className={`w-6 h-6 shrink-0 h-${size} mt-1 mb-1`}>template literal</div>
+                     ~~~ ~~~                    ~~~~ ~~~~
+!!! tailwindcss/enforces-shorthand: Classnames 'w-6, h-6' could be replaced by the 'size-6' shorthand!
+!!! tailwindcss/enforces-shorthand: Classnames 'mt-1, mb-1' could be replaced by the 'my-1' shorthand!
+);
+
+=== FIXED (--fix) ===
+(unchanged)
+=== FIXED (--fixall) ===
+export const Ternary = ({ active }: { active: boolean }) => (
+    <div className={active ? "p-4" : "px-2"}>ternary</div>
+);
+
+export const TemplateLiteral = ({ size }: { size: number }) => (
+    <div className={`size-6 shrink-0 h-${size} my-1`}>template literal</div>
+);

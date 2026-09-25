@@ -1,0 +1,11 @@
+==== input.ts (0 findings) ====
+export const dbQuery = "select-1 from-2 pt-2 pb-2 w-4 h-4";
+export const debugLabel = "pt-4 pb-4 unrelated string in script block";
+export const positions = "top-4 bottom-4 required";
+export const sides = 'left-4 right-4';
+export const spacing = `ml-2 mr-2 spacing note`;
+
+=== FIXED (--fix) ===
+(unchanged)
+=== FIXED (--fixall) ===
+(same as --fix)
