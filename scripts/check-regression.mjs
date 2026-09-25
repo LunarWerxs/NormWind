@@ -15,6 +15,11 @@
  *   fixall:       same as fix, but with --fixall, diffed against
  *                 expected.fixall.<ext> when present (otherwise expected.fixed.<ext>).
  *
+ *   golden:       renders the three outputs above into one reviewable
+ *                 expected.golden.txt: the input with ~~~ under every class a
+ *                 finding names, a "!!! <ruleId>: <message>" line per finding,
+ *                 then the --fix and --fixall output (scripts/squiggle-golden.mjs).
+ *
  * Modes:
  *   --update     write actual outputs to expected.* files (use to capture
  *                a new baseline; review the git diff before committing).
@@ -34,6 +39,8 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
+
+import { renderSquiggleGolden } from "./squiggle-golden.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -275,22 +282,22 @@ async function runAudit(fixtureDir, fixture, options) {
 
         const invariantError = checkExitCodeInvariant("audit", exitCode, actual.findingCount);
         if (invariantError) {
-            return { ok: false, label: "audit", error: invariantError };
+            return { ok: false, label: "audit", error: invariantError, output: actual };
         }
 
         const expectedPath = path.join(fixtureDir, "expected.json");
         if (options.update) {
             await writeJson(expectedPath, actual);
-            return { ok: true, label: "audit", note: "baseline written" };
+            return { ok: true, label: "audit", note: "baseline written", output: actual };
         }
         const expected = await readJsonIfExists(expectedPath);
         const diff = diffSummary("audit", expected, actual);
         if (diff) {
             // Emit an .actual.json sibling for human review.
             await writeJson(path.join(fixtureDir, "actual.json"), actual);
-            return { ok: false, label: "audit", error: diff };
+            return { ok: false, label: "audit", error: diff, output: actual };
         }
-        return { ok: true, label: "audit" };
+        return { ok: true, label: "audit", output: actual };
     } finally {
         await rmrf(tmpDir);
     }
@@ -324,17 +331,18 @@ async function runFixVariant(fixtureDir, fixture, fixFlag, expectedSuffix, optio
                 ok: false,
                 label: fixFlag,
                 error: `no JSON output after ${fixFlag} (exit=${exitCode}); stderr=${stderr.trim()}`,
+                output: actualText,
             };
         }
         const invariantError = checkExitCodeInvariant(fixFlag, exitCode, parsedPostFix.findingCount);
         if (invariantError) {
-            return { ok: false, label: fixFlag, error: invariantError };
+            return { ok: false, label: fixFlag, error: invariantError, output: actualText };
         }
 
         const expectedPath = path.join(fixtureDir, `expected.${expectedSuffix}${input.ext}`);
         if (options.update) {
             await fs.writeFile(expectedPath, actualText, "utf8");
-            return { ok: true, label: fixFlag, note: "baseline written" };
+            return { ok: true, label: fixFlag, note: "baseline written", output: actualText };
         }
 
         // A fixture whose input is already normalized turns the fix comparison
@@ -361,13 +369,14 @@ async function runFixVariant(fixtureDir, fixture, fixFlag, expectedSuffix, optio
                 ok: false,
                 label: fixFlag,
                 error: `  ${fixFlag}: input.${input.ext.slice(1)} is byte-identical to ${path.basename(expectedPath)}, so this fixture no longer exercises the fix path. Restore the un-normalized input, or add an empty .no-op file to the fixture directory if the no-op IS the assertion.`,
+                output: actualText,
             };
         }
 
         const expected = await readTextIfExists(expectedPath);
         if (expected === null) {
             await fs.writeFile(path.join(fixtureDir, `actual.${expectedSuffix}${input.ext}`), actualText, "utf8");
-            return { ok: false, label: fixFlag, error: `no baseline at ${path.basename(expectedPath)} (run with --update).` };
+            return { ok: false, label: fixFlag, error: `no baseline at ${path.basename(expectedPath)} (run with --update).`, output: actualText };
         }
         if (expected !== actualText) {
             await fs.writeFile(path.join(fixtureDir, `actual.${expectedSuffix}${input.ext}`), actualText, "utf8");
@@ -375,12 +384,53 @@ async function runFixVariant(fixtureDir, fixture, fixFlag, expectedSuffix, optio
                 ok: false,
                 label: fixFlag,
                 error: `${path.basename(expectedPath)} differs (see actual.${expectedSuffix}${input.ext})`,
+                output: actualText,
             };
         }
-        return { ok: true, label: fixFlag };
+        return { ok: true, label: fixFlag, output: actualText };
     } finally {
         await rmrf(tmpDir);
     }
+}
+
+// The golden is rendered from the ACTUAL outputs of the three passes, so on a
+// rule change actual.golden.txt shows the new squiggles and rewrite side by
+// side with the committed expected.golden.txt, as one readable diff.
+async function runGolden(fixtureDir, input, audit, fix, fixall, options) {
+    if (!audit.output || typeof fix.output !== "string" || typeof fixall.output !== "string") {
+        return { ok: false, label: "golden", error: "  golden: skipped, an earlier pass produced no output." };
+    }
+    const source = await fs.readFile(path.join(fixtureDir, input.name), "utf8");
+    const actualText = renderSquiggleGolden({
+        fileName: input.name,
+        source,
+        ruleId: audit.output.ruleId,
+        findings: audit.output.findings,
+        fixed: fix.output,
+        fixall: fixall.output,
+    });
+    const expectedPath = path.join(fixtureDir, "expected.golden.txt");
+    if (options.update) {
+        await fs.writeFile(expectedPath, actualText, "utf8");
+        return { ok: true, label: "golden", note: "baseline written" };
+    }
+    const expected = await readTextIfExists(expectedPath);
+    if (expected === actualText) {
+        return { ok: true, label: "golden" };
+    }
+    await fs.writeFile(path.join(fixtureDir, "actual.golden.txt"), actualText, "utf8");
+    return {
+        ok: false,
+        label: "golden",
+        error: expected === null
+            ? "  golden: no baseline at expected.golden.txt (run with --update)."
+            : "  golden: expected.golden.txt differs (see actual.golden.txt)",
+    };
+}
+
+// Pass outputs feed the golden render but stay out of the --json summary.
+function withoutOutput({ output, ...result }) {
+    return result;
 }
 
 async function runFixture(fixture, options) {
@@ -392,10 +442,12 @@ async function runFixture(fixture, options) {
         return { fixture, results: [{ ok: false, label: "setup", error: "no input.* file" }] };
     }
 
-    const results = [];
-    results.push(await runAudit(fixtureDir, fixture, options));
-    results.push(await runFixVariant(fixtureDir, fixture, "--fix", "fixed", options));
-    results.push(await runFixVariant(fixtureDir, fixture, "--fixall", "fixall", options));
+    const audit = await runAudit(fixtureDir, fixture, options);
+    const fix = await runFixVariant(fixtureDir, fixture, "--fix", "fixed", options);
+    const fixall = await runFixVariant(fixtureDir, fixture, "--fixall", "fixall", options);
+    const golden = await runGolden(fixtureDir, input, audit, fix, fixall, options);
+    const results = [audit, fix, fixall].map(withoutOutput);
+    results.push(golden);
     return { fixture, results };
 }
 

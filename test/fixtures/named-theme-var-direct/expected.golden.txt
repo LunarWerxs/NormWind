@@ -1,0 +1,41 @@
+==== input.vue (9 findings) ====
+<template>
+    <div class="border-[var(--color-ink-400)]/40 text-(--color-ink-700) bg-(--color-ink-100)">
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ~~~~~~~~~~~~~~~~~~~~~~ ~~~~~~~~~~~~~~~~~~~~
+!!! tailwindcss/enforces-shorthand: The class 'border-[var(--color-ink-400)]/40' can be written as 'border-ink-400/40'
+!!! tailwindcss/enforces-shorthand: The class 'text-(--color-ink-700)' can be written as 'text-ink-700'
+!!! tailwindcss/enforces-shorthand: The class 'bg-(--color-ink-100)' can be written as 'bg-ink-100'
+        <p class="ring-(--color-brand-200) divide-(--color-ink-300)">brand</p>
+                  ~~~~~~~~~~~~~~~~~~~~~~~~ ~~~~~~~~~~~~~~~~~~~~~~~~
+!!! tailwindcss/enforces-shorthand: The class 'ring-(--color-brand-200)' can be written as 'ring-brand-200'
+!!! tailwindcss/enforces-shorthand: The class 'divide-(--color-ink-300)' can be written as 'divide-ink-300'
+        <button
+            class="rounded-[var(--radius-sm)] data-[state=open]:text-(--color-ink-1000) px-2 py-2"
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ~~~~ ~~~~
+!!! tailwindcss/enforces-shorthand: Classnames 'px-2, py-2' could be replaced by the 'p-2' shorthand!
+!!! tailwindcss/enforces-shorthand: The class 'rounded-[var(--radius-sm)]' can be written as 'rounded-sm'
+!!! tailwindcss/enforces-shorthand: The class 'data-[state=open]:text-(--color-ink-1000)' can be written as 'data-[state=open]:text-ink-1000'
+        >
+            click
+        </button>
+        <span class="bg-[var(--color-doesnotexist)]">unknown var stays</span>
+                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+!!! tailwindcss/enforces-shorthand: The class 'bg-[var(--color-doesnotexist)]' can be written as 'bg-(--color-doesnotexist)'
+    </div>
+</template>
+
+=== FIXED (--fix) ===
+<template>
+    <div class="border-ink-400/40 text-ink-700 bg-ink-100">
+        <p class="ring-brand-200 divide-ink-300">brand</p>
+        <button
+            class="rounded-sm data-[state=open]:text-ink-1000 p-2"
+        >
+            click
+        </button>
+        <span class="bg-(--color-doesnotexist)">unknown var stays</span>
+    </div>
+</template>
+
+=== FIXED (--fixall) ===
+(same as --fix)

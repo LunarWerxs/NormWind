@@ -1,0 +1,14 @@
+==== input.vue (1 finding) ====
+<template>
+    <div class="border-(--md-sys-color-outline-variant) p-2"></div>
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+!!! tailwindcss/enforces-shorthand: The class 'border-(--md-sys-color-outline-variant)' can be written as 'border-outline-variant'
+</template>
+
+=== FIXED (--fix) ===
+<template>
+    <div class="border-outline-variant p-2"></div>
+</template>
+
+=== FIXED (--fixall) ===
+(same as --fix)

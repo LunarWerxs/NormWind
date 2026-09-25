@@ -1,0 +1,27 @@
+==== input.tsx (0 findings) ====
+// Cases that MUST NOT produce findings:
+//   - mismatched values: px-4 py-2 (different values)
+//   - already-canonical: p-4
+//   - non-Tailwind classes: btn-primary, flex (single utility, no shorthand opportunity)
+//   - different variants: md:px-4 py-4 (variant differs from py-4)
+
+export const MismatchedValues = () => (
+    <div className="px-4 py-2">different values</div>
+);
+
+export const AlreadyCanonical = () => (
+    <div className="p-4 m-2 size-6">canonical already</div>
+);
+
+export const NonTailwind = () => (
+    <div className="btn-primary card">not tailwind utilities</div>
+);
+
+export const DifferentVariants = () => (
+    <div className="md:px-4 py-4">different variant prefixes</div>
+);
+
+=== FIXED (--fix) ===
+(unchanged)
+=== FIXED (--fixall) ===
+(same as --fix)

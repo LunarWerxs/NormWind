@@ -1,0 +1,26 @@
+==== input.vue (5 findings) ====
+<template>
+    <div :class="cond ? 'px-4 py-4 rounded' : 'pl-2 pr-2'">ternary</div>
+                         ~~~~ ~~~~             ~~~~ ~~~~
+!!! tailwindcss/enforces-shorthand: Classnames 'px-4, py-4' could be replaced by the 'p-4' shorthand!
+!!! tailwindcss/enforces-shorthand: Classnames 'pl-2, pr-2' could be replaced by the 'px-2' shorthand!
+    <span :class="{ 'w-4 h-4': active }">object binding</span>
+                     ~~~ ~~~
+!!! tailwindcss/enforces-shorthand: Classnames 'w-4, h-4' could be replaced by the 'size-4' shorthand!
+    <p v-bind:class="cond ? 'mt-2 mb-2' : 'gap-x-2 gap-y-2'">v-bind variant</p>
+                             ~~~~ ~~~~     ~~~~~~~ ~~~~~~~
+!!! tailwindcss/enforces-shorthand: Classnames 'mt-2, mb-2' could be replaced by the 'my-2' shorthand!
+!!! tailwindcss/enforces-shorthand: Classnames 'gap-x-2, gap-y-2' could be replaced by the 'gap-2' shorthand!
+    <i class="static-note">static</i>
+</template>
+
+=== FIXED (--fix) ===
+<template>
+    <div :class="cond ? 'p-4 rounded' : 'px-2'">ternary</div>
+    <span :class="{ 'size-4': active }">object binding</span>
+    <p v-bind:class="cond ? 'my-2' : 'gap-2'">v-bind variant</p>
+    <i class="static-note">static</i>
+</template>
+
+=== FIXED (--fixall) ===
+(same as --fix)
