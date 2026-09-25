@@ -45,6 +45,21 @@ inputs:
       findings in code scanning. Empty writes no SARIF file.
     required: false
     default: ""
+  changed-lines-only:
+    description: >-
+      Annotate, write SARIF for, and fail on only the findings on lines changed
+      since diff-base, so an existing codebase can adopt the audit without
+      fixing old debt first. The JSON report still lists every finding. Needs
+      history: check out with fetch-depth 0.
+    required: false
+    default: "false"
+  diff-base:
+    description: >-
+      Ref that changed-lines-only diffs against (its merge base with HEAD).
+      Empty uses origin/<pull request base branch>; required outside a
+      pull_request event.
+    required: false
+    default: ""
 
 outputs:
   version:

@@ -153,6 +153,7 @@ This is deliberately conservative: an unusual class list can keep a merge NormWi
 | `normwind --json`                                        | Print machine-readable audit output (alias for `--reporter json`). |
 | `normwind --ignore <glob>`                               | Skip paths matching a glob. Repeatable. |
 | `normwind --allow-empty`                                 | Exit `0` instead of `2` when the given pattern(s) match no lintable files. |
+| `normwind --diff-base <ref>`                             | Report, and exit `1` for, only findings on lines changed since the merge base of `<ref>` (e.g. `origin/main`), plus untracked files. Findings on other lines are counted on stderr, so an existing codebase can adopt the audit at full strictness. |
 | `normwind --fix`                                         | Apply safe fixes across every markup format (Vue, Svelte, Astro, HTML), then re-run the audit. |
 | `normwind --fixall`                                      | Apply broader fixes across every supported source type, including JS, MJS, CJS, TS, JSX, TSX, MTS, and CTS, then re-run the audit. |
 | `normwind --fix --dry-run` / `normwind --fixall --dry-run` | Show which files *would* be rewritten without writing anything to disk. |
@@ -202,7 +203,7 @@ JSON output is stable and CI-friendly:
 | ---- | ------- |
 | `0`  | No findings, or a requested maintenance command completed successfully. |
 | `1`  | Audit findings exist, or canonical drift was detected. |
-| `2`  | Usage or runtime error (unknown flag, invalid `--reporter` value, missing `--theme-css` value, unreadable `--theme-css` path, etc.); a pattern matched no lintable files (pass `--allow-empty` for `0` instead); `--fix`/`--fixall`/`--dry-run` was combined with `--check-canonical`, `--extract-canonical`, or `--cleanup-canonical-files`; `--dry-run` was passed without `--fix`/`--fixall`; **or** `--fix`/`--fixall` finished with one or more files skipped/failed (see the fix summary printed to stderr). |
+| `2`  | Usage or runtime error (unknown flag, invalid `--reporter` value, missing `--theme-css` value, unreadable `--theme-css` path, etc.); a pattern matched no lintable files (pass `--allow-empty` for `0` instead); `--fix`/`--fixall`/`--dry-run` was combined with `--check-canonical`, `--extract-canonical`, or `--cleanup-canonical-files`; `--dry-run` was passed without `--fix`/`--fixall`; `--diff-base` could not be read (not a git checkout, unknown ref) or was combined with a canonical-maintenance flag; **or** `--fix`/`--fixall` finished with one or more files skipped/failed (see the fix summary printed to stderr). |
 
 ## 🔧 Fix modes
 
@@ -405,6 +406,8 @@ Inputs:
 | `max-annotations` | `10` | Inline annotation cap from `0` to `50`; every finding remains in the summary/report. |
 | `ignore` | none | Newline-delimited globs to skip. A `.normwindignore` file in the checkout is deliberately ignored in Action mode (the checkout is untrusted input), so use this workflow-authored input instead. |
 | `sarif-file` | none | Path, relative to the working directory, to write a SARIF 2.1.0 report to. Pair it with `github/codeql-action/upload-sarif` to surface findings in code scanning. |
+| `changed-lines-only` | `false` | Annotate, write SARIF for, and fail on only the findings on lines the change touches; the JSON report still lists every finding. Check out with `fetch-depth: 0` so the base branch is present. |
+| `diff-base` | `origin/<PR base branch>` | Ref `changed-lines-only` diffs against (its merge base with `HEAD`). Required outside a `pull_request` event. |
 
 Outputs: `version`, `finding-count`, `linted-files`, `result`, `exit-code`, `report-path`, and `sarif-path` (set only when `sarif-file` was provided).
 
@@ -521,6 +524,15 @@ As of `eslint-plugin-tailwindcss` 4.x, that group table lives in NormWind's own 
 </details>
 
 ## 📜 Changelog
+
+<details>
+<summary><strong>Unreleased</strong></summary>
+
+<br/>
+
+- **Gate on changed lines only**: `--diff-base <ref>` (CLI) and `changed-lines-only` / `diff-base` (Action) report, annotate, write SARIF for, and fail on only the findings on lines a change adds or edits, relative to the merge base with `<ref>`. Turning the audit on in an existing codebase no longer floods the first pull request with findings nobody touched; the CLI counts the rest on stderr and the Action's JSON report still lists every finding. With changed-lines gating on, the Action's `finding-count` and `exit-code` outputs describe the gated findings.
+
+</details>
 
 <details>
 <summary><strong>v3.8.1</strong>: 2026-09-03 · maintenance release, no change to scanning, fixing, or output</summary>
