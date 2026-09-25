@@ -10,6 +10,7 @@ import {
     buildChangedLineLookup,
     isChangedLine,
     parseChangedLines,
+    partitionFindingsByChangedLines,
 } from "../../lib/changed-lines.mjs";
 
 const DIFF = [
@@ -58,6 +59,21 @@ test("changed lines: lookup by absolute path, untracked files count in full", ()
     assert.ok(!isChangedLine(lookup, path.join(root, "src", "Card.vue"), 9));
     assert.ok(isChangedLine(lookup, path.join(root, "src", "New.vue"), 999));
     assert.ok(!isChangedLine(lookup, path.join(root, "src", "Other.vue"), 1));
+});
+
+test("changed lines: a --baseline note to lower a count is always gated", () => {
+    const root = path.resolve("repo-root");
+    const lookup = buildChangedLineLookup(root, parseChangedLines(DIFF), []);
+    const onChanged = { filePath: "src/Card.vue", line: 3 };
+    const onUnchanged = { filePath: "src/Card.vue", line: 9 };
+    const note = { filePath: "src/Old.vue", line: 1, baselineNote: true };
+    const { changed, unchanged } = partitionFindingsByChangedLines(
+        [onChanged, onUnchanged, note],
+        lookup,
+        (finding) => path.join(root, finding.filePath),
+    );
+    assert.deepStrictEqual(changed, [onChanged, note]);
+    assert.deepStrictEqual(unchanged, [onUnchanged]);
 });
 
 test("diff base refuses option-shaped and range refs", () => {
