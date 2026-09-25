@@ -38,6 +38,7 @@
     "test:regression": "node scripts/check-regression.mjs",
     "test:regression:update": "node scripts/check-regression.mjs --update",
     "test:compare": "node scripts/check-compare.mjs",
+    "test:precision": "node scripts/check-precision.mjs",
     "test:units": "node --test"
   },
   "engines": {
