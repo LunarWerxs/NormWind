@@ -16,7 +16,7 @@ import {
     saveDiskCache,
 } from "../lib/canonical-cache.mjs";
 import { cleanupCanonicalArtifacts, extractCanonicalReplacements } from "../lib/canonical-extract.mjs";
-import { partitionFindingsByChangedLines, readChangedLines } from "../lib/changed-lines.mjs";
+import { countChangedFiles, partitionFindingsByChangedLines, readChangedLines } from "../lib/changed-lines.mjs";
 import { extractClassLikeStrings } from "../lib/class-extraction.mjs";
 import { parseArgs, printHelp } from "../lib/cli-args.mjs";
 import { FILE_SCAN_CONCURRENCY, runWithConcurrency } from "../lib/concurrency.mjs";
@@ -574,7 +574,12 @@ async function handleEarlyExit({
         process.exitCode = 2;
         return true;
     }
-    if (maintenanceMode && diffBase) {
+    if (diffBase !== null && !diffBase.trim()) {
+        console.error("normwinds: --diff-base requires a ref (e.g. --diff-base origin/main).");
+        process.exitCode = 2;
+        return true;
+    }
+    if (maintenanceMode && diffBase !== null) {
         console.error(
             "normwinds: --diff-base cannot be combined with --check-canonical, --extract-canonical, or --cleanup-canonical-files.",
         );
@@ -720,6 +725,17 @@ async function main() {
     if (fix) {
         const fixResult = await applyFixes(filePaths, { fixAll, suggestNamedThemeVars, themeCssPath, dryRun });
         fixIssues = fixResult.failed + fixResult.skipped;
+        // A fix can add or remove lines, which would shift later findings off
+        // the line numbers read above, so read the diff again after writing.
+        if (changedLines && !dryRun) {
+            try {
+                changedLines = await readChangedLines(diffBase, { cwd: process.cwd() });
+            } catch (error) {
+                console.error(`normwinds: --diff-base: ${error?.message || String(error)}`);
+                process.exitCode = 2;
+                return;
+            }
+        }
     }
 
     const scanResult = await collectStaticShorthandFindings(filePaths, { suggestNamedThemeVars, themeCssPath });
@@ -739,6 +755,12 @@ async function main() {
         );
         findings = changed;
         diffGate = { diffBase, unchangedCount: unchanged.length };
+        const scannedPaths = filePaths.map((filePath) => path.resolve(process.cwd(), filePath));
+        if (changedLines.size > 0 && countChangedFiles(changedLines, scannedPaths) === 0) {
+            console.error(
+                `normwinds: --diff-base ${diffBase}: git reports changed files, but none of the scanned files match them; check that the working directory path matches the repository path.`,
+            );
+        }
         if (unchanged.length > 0) {
             console.error(
                 `normwinds: --diff-base ${diffBase}: ${unchanged.length} finding(s) on unchanged lines not reported (run without --diff-base to list them).`,

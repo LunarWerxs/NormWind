@@ -200,7 +200,9 @@ function resolveDiffBase() {
 async function gateToChangedLines(payload, execution, { diffBase, workingDirectory }) {
     let lookup;
     try {
-        lookup = await readChangedLines(diffBase, { cwd: workingDirectory });
+        // git starts in ACTION_ROOT, not the untrusted checkout, so a committed
+        // git.exe there is never the one run.
+        lookup = await readChangedLines(diffBase, { cwd: workingDirectory, gitCwd: ACTION_ROOT });
     } catch (error) {
         throw new Error(
             `changed-lines-only could not diff against "${diffBase}" (check out with fetch-depth: 0): ${error?.message || String(error)}`,
