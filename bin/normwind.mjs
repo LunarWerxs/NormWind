@@ -446,7 +446,7 @@ async function collectStaticShorthandFindings(filePaths, { suggestNamedThemeVars
     for (let round = 0; round < MAX_MERGE_SAFETY_ROUNDS; round += 1) {
         const probe = createMergeSafetyProbe();
         perFileFindings = await runDetectionSweep(probe);
-        if (!(await resolvePendingMergeChecks(probe.pending, probe.pendingCollapses))) {
+        if (!(await resolvePendingMergeChecks(probe.pending))) {
             break;
         }
     }
