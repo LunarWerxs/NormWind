@@ -153,6 +153,8 @@ This is deliberately conservative: an unusual class list can keep a merge NormWi
 | `normwind --json`                                        | Print machine-readable audit output (alias for `--reporter json`). |
 | `normwind --ignore <glob>`                               | Skip paths matching a glob. Repeatable. |
 | `normwind --allow-empty`                                 | Exit `0` instead of `2` when the given pattern(s) match no lintable files. |
+| `normwind --baseline <file>`                             | Adopt NormWind on a codebase that already has findings: only findings beyond each file's recorded count fail. See [Adopting on an existing codebase](#adopting-on-an-existing-codebase). |
+| `normwind --baseline <file> --update-baseline`           | Write the current per-file counts to the baseline. Creates it once; afterwards it only lowers or removes counts. |
 | `normwind --fix`                                         | Apply safe fixes across every markup format (Vue, Svelte, Astro, HTML), then re-run the audit. |
 | `normwind --fixall`                                      | Apply broader fixes across every supported source type, including JS, MJS, CJS, TS, JSX, TSX, MTS, and CTS, then re-run the audit. |
 | `normwind --fix --dry-run` / `normwind --fixall --dry-run` | Show which files *would* be rewritten without writing anything to disk. |
@@ -201,8 +203,8 @@ JSON output is stable and CI-friendly:
 | Code | Meaning |
 | ---- | ------- |
 | `0`  | No findings, or a requested maintenance command completed successfully. |
-| `1`  | Audit findings exist, or canonical drift was detected. |
-| `2`  | Usage or runtime error (unknown flag, invalid `--reporter` value, missing `--theme-css` value, unreadable `--theme-css` path, etc.); a pattern matched no lintable files (pass `--allow-empty` for `0` instead); `--fix`/`--fixall`/`--dry-run` was combined with `--check-canonical`, `--extract-canonical`, or `--cleanup-canonical-files`; `--dry-run` was passed without `--fix`/`--fixall`; **or** `--fix`/`--fixall` finished with one or more files skipped/failed (see the fix summary printed to stderr). |
+| `1`  | Audit findings exist, or canonical drift was detected. With `--baseline`: a file has more findings than its recorded count, a count dropped and the baseline was not lowered, or `--update-baseline` refused to raise a count. |
+| `2`  | Usage or runtime error (unknown flag, invalid `--reporter` value, missing `--theme-css` value, unreadable `--theme-css` path, missing or malformed `--baseline` file, etc.); a pattern matched no lintable files (pass `--allow-empty` for `0` instead); `--fix`/`--fixall`/`--dry-run` was combined with `--check-canonical`, `--extract-canonical`, or `--cleanup-canonical-files`; `--dry-run` was passed without `--fix`/`--fixall`; **or** `--fix`/`--fixall` finished with one or more files skipped/failed (see the fix summary printed to stderr). |
 
 ## 🔧 Fix modes
 
@@ -405,6 +407,7 @@ Inputs:
 | `max-annotations` | `10` | Inline annotation cap from `0` to `50`; every finding remains in the summary/report. |
 | `ignore` | none | Newline-delimited globs to skip. A `.normwindignore` file in the checkout is deliberately ignored in Action mode (the checkout is untrusted input), so use this workflow-authored input instead. |
 | `sarif-file` | none | Path, relative to the working directory, to write a SARIF 2.1.0 report to. Pair it with `github/codeql-action/upload-sarif` to surface findings in code scanning. |
+| `baseline` | none | Path, relative to the working directory, to a baseline of per-file finding counts (see [Adopting on an existing codebase](#adopting-on-an-existing-codebase)). Only findings beyond a file's count fail, and a count that dropped fails until the baseline is lowered. The Action only reads it, never rewrites it. |
 
 Outputs: `version`, `finding-count`, `linted-files`, `result`, `exit-code`, `report-path`, and `sarif-path` (set only when `sarif-file` was provided).
 
@@ -419,6 +422,22 @@ npx @lunawerx/normwind --json
 ```
 
 That's it: exit code `1` fails the job, and the JSON payload is stable enough to feed a custom reporter or annotation step.
+
+### Adopting on an existing codebase
+
+A project that already has hundreds of findings can still turn the gate on today. Record what is there once, commit the file, and point CI at it:
+
+```bash
+npx @lunawerx/normwind --baseline .normwind-baseline.json --update-baseline
+```
+
+The baseline is a small JSON file of per-file finding counts (paths relative to the directory NormWind runs in). With `--baseline`, a file may keep up to its recorded count; one more finding fails the run and reports every finding in that file, since line numbers move and any of them may be the new one. It is a ratchet, so the debt only goes down:
+
+- **A count that rises fails.** `--update-baseline` refuses to raise a count or add a file; fix the new finding, or edit the file by hand if the increase is deliberate (the change then shows up in review).
+- **A count that drops also fails**, with a note on line 1 of that file, until you run `--update-baseline` again to lower it. That keeps the baseline honest instead of quietly leaving room for new findings to come back.
+- Entries for files outside the run's patterns are left alone; entries for deleted files are stale and removed on the next update. An incomplete scan (a skipped or unreadable file) never rewrites the baseline.
+
+In the GitHub Action, pass the committed file through the `baseline` input. The Action only reads it. Because it lives in the checkout, a pull request that raises a count shows the change in its diff; guard the file with CODEOWNERS if that matters to you. The JSON report gains a `baseline` object (`path`, `suppressed`, `exceeded`, `stale`, `updated`) whenever `--baseline` is set.
 
 ## 🧰 What's in the box
 
@@ -521,6 +540,15 @@ As of `eslint-plugin-tailwindcss` 4.x, that group table lives in NormWind's own 
 </details>
 
 ## 📜 Changelog
+
+<details>
+<summary><strong>Unreleased</strong></summary>
+
+<br/>
+
+- **Per-file count baseline (`--baseline`, `--update-baseline`, Action `baseline` input)**: adopt NormWind in CI on a codebase that already has findings. A file may keep the findings it had when the baseline was recorded; a new one fails, and a count that drops fails until the baseline is lowered, so the debt only goes down. `--update-baseline` creates the file once and afterwards refuses to raise any count. See [Adopting on an existing codebase](#adopting-on-an-existing-codebase).
+
+</details>
 
 <details>
 <summary><strong>v3.8.1</strong>: 2026-09-03 · maintenance release, no change to scanning, fixing, or output</summary>

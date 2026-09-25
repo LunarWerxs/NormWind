@@ -412,6 +412,53 @@ addCheck("sarif-file and ignore inputs", async () => {
     }
 });
 
+// WHY: pins the baseline input end to end (Action wrapper -> CLI --baseline):
+// a legacy finding the baseline holds keeps the run green, one new finding in
+// another file fails it, and a baseline outside the workspace fails closed.
+addCheck("baseline input holds legacy findings and fails new ones", async () => {
+    const baselineFile = JSON.stringify({ version: 1, files: { "src/Legacy.vue": 1 } });
+    const held = await runAction({
+        files: { "src/Legacy.vue": FINDING_SOURCE, ".normwind-baseline.json": baselineFile },
+        inputs: { BASELINE: ".normwind-baseline.json" },
+    });
+    try {
+        assert(held.exitCode === 0, `${held.stdout}\n${held.stderr}`);
+        assert(held.outputs.result === "clean", JSON.stringify(held.outputs));
+        assert(held.summary.includes("1 existing finding(s) held back"), held.summary);
+    } finally {
+        await held.cleanup();
+    }
+
+    const grew = await runAction({
+        files: {
+            "src/Legacy.vue": FINDING_SOURCE,
+            "src/New.vue": FINDING_SOURCE.replace("Finding", "New"),
+            ".normwind-baseline.json": baselineFile,
+        },
+        inputs: { BASELINE: ".normwind-baseline.json" },
+    });
+    try {
+        assert(grew.exitCode === 1, `${grew.stdout}\n${grew.stderr}`);
+        assert(grew.outputs["finding-count"] === "1", JSON.stringify(grew.outputs));
+        assert(grew.stdout.includes("src/New.vue"), grew.stdout);
+    } finally {
+        await grew.cleanup();
+    }
+
+    const escaping = await runAction({
+        files: { "src/Clean.vue": CLEAN_SOURCE },
+        outsideFiles: { "baseline.json": baselineFile },
+        inputs: { BASELINE: "../baseline.json" },
+    });
+    try {
+        assert(escaping.exitCode === 1, escaping.stdout);
+        assert(escaping.outputs.result === "error", JSON.stringify(escaping.outputs));
+        assert(escaping.stdout.includes("must stay inside GITHUB_WORKSPACE"), escaping.stdout);
+    } finally {
+        await escaping.cleanup();
+    }
+});
+
 // The Action's first line of defence lives in action/index.mjs and is covered
 // above. These checks exercise the SECOND line: the NORMWIND_ACTION_WORKSPACE
 // guards inside the scanner itself (assertInsideActionWorkspace,

@@ -45,6 +45,16 @@ inputs:
       findings in code scanning. Empty writes no SARIF file.
     required: false
     default: ""
+  baseline:
+    description: >-
+      Optional path, relative to the working directory, to a NormWind baseline
+      file of per-file finding counts (create it with the CLI's
+      --update-baseline). Files may keep up to their recorded count; a new
+      finding fails the run, and a count that dropped fails until the baseline
+      is lowered. The file is part of the checkout, so a pull request that
+      raises a count shows it in its diff; protect it with CODEOWNERS.
+    required: false
+    default: ""
 
 outputs:
   version:

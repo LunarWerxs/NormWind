@@ -15,6 +15,7 @@ import {
     peekCanonicalizerPromise,
     saveDiskCache,
 } from "../lib/canonical-cache.mjs";
+import { applyBaseline, readBaselineFile } from "../lib/baseline.mjs";
 import { cleanupCanonicalArtifacts, extractCanonicalReplacements } from "../lib/canonical-extract.mjs";
 import { extractClassLikeStrings } from "../lib/class-extraction.mjs";
 import { parseArgs, printHelp } from "../lib/cli-args.mjs";
@@ -520,6 +521,8 @@ async function handleEarlyExit({
     checkCanonical,
     extractCanonical,
     cleanupCanonicalFiles,
+    baselinePath,
+    updateBaseline,
 }) {
     if (help) {
         printHelp();
@@ -577,6 +580,39 @@ async function handleEarlyExit({
         process.exitCode = 2;
         return true;
     }
+    if (maintenanceMode && (baselinePath || updateBaseline)) {
+        console.error(
+            "normwinds: --baseline/--update-baseline cannot be combined with --check-canonical, --extract-canonical, or --cleanup-canonical-files.",
+        );
+        process.exitCode = 2;
+        return true;
+    }
+    if (updateBaseline && !baselinePath) {
+        console.error("normwinds: --update-baseline requires --baseline <file>.");
+        process.exitCode = 2;
+        return true;
+    }
+
+    // A --baseline that is missing or malformed fails up front: treating it as
+    // empty would fail every legacy finding at once, and there is no safe
+    // permissive reading of a broken file. Only --update-baseline may create it.
+    if (baselinePath) {
+        try {
+            const { exists } = await readBaselineFile(baselinePath);
+            if (!exists && !updateBaseline) {
+                console.error(
+                    `normwinds: --baseline "${baselinePath}" does not exist. Create it once with --baseline "${baselinePath}" --update-baseline.`,
+                );
+                process.exitCode = 2;
+                return true;
+            }
+        } catch (error) {
+            const reason = error?.message || String(error);
+            console.error(reason.startsWith("normwinds:") ? reason : `normwinds: failed to read --baseline "${baselinePath}": ${reason}`);
+            process.exitCode = 2;
+            return true;
+        }
+    }
 
     // An explicitly-requested --theme-css that cannot be loaded is a
     // misconfiguration, not a degraded mode: fail loud up front instead of
@@ -602,7 +638,7 @@ async function handleEarlyExit({
 
 // Print the scan report in the requested format (sarif/json/text). Split out
 // of main's reporter if/else-if/else chain.
-function printScanReport(reporter, findings, lintedFiles) {
+function printScanReport(reporter, findings, lintedFiles, baseline = null) {
     if (reporter === "sarif") {
         console.log(JSON.stringify(buildSarifReport(findings, lintedFiles, {
             version: NORMWINDS_VERSION,
@@ -617,6 +653,8 @@ function printScanReport(reporter, findings, lintedFiles) {
                     lintedFiles,
                     findingCount: findings.length,
                     findings,
+                    // Present only with --baseline, so the shape of a plain run is unchanged.
+                    ...(baseline ? { baseline } : {}),
                 },
                 null,
                 2,
@@ -631,6 +669,7 @@ async function main() {
     const parsedArgs = parseArgs(process.argv.slice(2));
     const {
         allowEmpty,
+        baselinePath,
         checkCanonical,
         cleanupCanonicalFiles,
         dryRun,
@@ -642,6 +681,7 @@ async function main() {
         reporter,
         suggestNamedThemeVars,
         themeCssPath,
+        updateBaseline,
         writeCanonicalFiles,
     } = parsedArgs;
 
@@ -698,17 +738,34 @@ async function main() {
 
     const scanResult = await collectStaticShorthandFindings(filePaths, { suggestNamedThemeVars, themeCssPath });
     const {
-        findings,
         lintedFiles,
         skipped: scanSkipped,
         failures: scanFailures,
     } = scanResult;
+    let { findings } = scanResult;
     printScanIssueSummary(scanSkipped, scanFailures);
     const scanIssues = scanSkipped.length + scanFailures.length;
 
     await saveDiskCache();
 
-    printScanReport(reporter, findings, lintedFiles);
+    // The count ratchet runs after the scan, on the finished finding list, so
+    // every reporter and the exit code below see only what the baseline does
+    // not already hold (new findings, plus notes for counts to lower).
+    let baselineSummary = null;
+    if (baselinePath) {
+        const baselineResult = await applyBaseline({
+            baselinePath,
+            update: updateBaseline,
+            findings,
+            scannedPaths: filePaths.map(toRelative),
+            scanComplete: scanIssues === 0,
+            ruleId: RULE_ID,
+        });
+        findings = baselineResult.findings;
+        baselineSummary = baselineResult.summary;
+    }
+
+    printScanReport(reporter, findings, lintedFiles, baselineSummary);
 
     // Exit 2 distinguishes a partial-failure run (some files couldn't be written)
     // from a clean audit (0) or one that merely found lint issues (1), so CI can

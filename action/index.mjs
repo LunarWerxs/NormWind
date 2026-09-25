@@ -91,22 +91,28 @@ function parsePatterns() {
     return parseConfinedGlobs("patterns");
 }
 
-async function resolveThemeCss(themeCss, { workspace, workingDirectory }) {
-    if (!themeCss) {
+// An existing checkout file named by an input (theme-css, baseline): resolved
+// through realpath so a symlink cannot point the scanner outside the workspace.
+async function resolveCheckoutFile(value, label, { workspace, workingDirectory }) {
+    if (!value) {
         return "";
     }
-    const candidate = path.resolve(workingDirectory, themeCss);
+    const candidate = path.resolve(workingDirectory, value);
     const realPath = await fs.realpath(candidate).catch(() => {
-        throw new Error(`Theme CSS entry does not exist: ${candidate}`);
+        throw new Error(`${label} does not exist: ${candidate}`);
     });
     if (!isInside(workspace, realPath)) {
-        throw new Error(`Theme CSS entry must stay inside GITHUB_WORKSPACE: ${themeCss}`);
+        throw new Error(`${label} must stay inside GITHUB_WORKSPACE: ${value}`);
     }
     const stat = await fs.stat(realPath);
     if (!stat.isFile()) {
-        throw new Error(`Theme CSS entry is not a regular file: ${realPath}`);
+        throw new Error(`${label} is not a regular file: ${realPath}`);
     }
     return realPath;
+}
+
+async function resolveThemeCss(themeCss, context) {
+    return resolveCheckoutFile(themeCss, "Theme CSS entry", context);
 }
 
 // The SARIF target is written by the Action, not the scanner, so it is
@@ -295,6 +301,18 @@ async function writeSummary(payload, findings, exitCode, annotatedCount) {
             [result, String(payload.lintedFiles), String(payload.findingCount), escapeHtml(payload.version)],
         ]);
 
+    // With a baseline, say how much legacy debt it is holding back, so a green
+    // run is not mistaken for a clean codebase.
+    const baseline = payload.baseline;
+    if (baseline && typeof baseline === "object") {
+        const suppressed = Number.isInteger(baseline.suppressed) ? baseline.suppressed : 0;
+        const exceeded = Number.isInteger(baseline.exceeded) ? baseline.exceeded : 0;
+        const stale = Number.isInteger(baseline.stale) ? baseline.stale : 0;
+        core.summary.addRaw(
+            `\nBaseline: ${suppressed} existing finding(s) held back, ${exceeded} file(s) over their count, ${stale} count(s) to lower.\n`,
+        );
+    }
+
     if (findings.length > 0) {
         const rows = findings.slice(0, 100).map((finding) => [
             `<code>${escapeHtml(finding.file)}</code>`,
@@ -378,6 +396,10 @@ export async function runAction() {
             workspace,
             workingDirectory,
         });
+        const baseline = await resolveCheckoutFile(core.getInput("baseline").trim(), "Baseline file", {
+            workspace,
+            workingDirectory,
+        });
 
         if (suggestNamedThemeVars && !themeCss) {
             throw new Error('Input "suggest-named-theme-vars" requires "theme-css".');
@@ -392,6 +414,11 @@ export async function runAction() {
         }
         for (const ignore of ignores) {
             args.push("--ignore", ignore);
+        }
+        // Compare only: the Action never passes --update-baseline, because it
+        // runs on untrusted PR input and must not write to the checkout.
+        if (baseline) {
+            args.push("--baseline", baseline);
         }
 
         core.info(`Running NormWind in ${workingDirectory}`);
