@@ -466,7 +466,7 @@ Run the full pre-push verification suite:
 npm test          # alias: npm run prepush
 ```
 
-The pre-push suite verifies package metadata, canonical-snapshot integrity, canonical drift, regression fixtures, live-Tailwind-vs-snapshot parity, CLI audit/fix smoke behavior, and `npm pack --dry-run` contents.
+The pre-push suite verifies package metadata, canonical-snapshot integrity, canonical drift, regression fixtures, the rewrite-precision gate, live-Tailwind-vs-snapshot parity, CLI audit/fix smoke behavior, and `npm pack --dry-run` contents.
 
 Other useful scripts:
 
@@ -474,10 +474,17 @@ Other useful scripts:
 npm run test:regression          # run the regression fixtures
 npm run test:regression:update   # update fixtures after an intentional change
 npm run test:compare             # live canonicalizer vs bundled snapshot
+npm run test:precision           # score the rewrite rules against the labelled corpus
 npm run canonical:extract        # regenerate canonical replacement files
 npm run canonical:check          # verify canonical replacement files are current
 npm run deps:sync                # after a dependency bump: refresh bun.lock and rebuild dist/
 ```
+
+### Rewrite precision gate
+
+A false positive is a bug in a rewrite rule, so the rate is measured, not assumed. `test/precision/corpus.json` holds labelled class strings: `rewrite` cases name the exact result `--fixall` must produce, and `keep` cases must be neither reported nor rewritten. `npm run test:precision` runs the whole corpus through the real CLI twice (audit, then `--fixall`) and fails when either pass drops below **precision 0.90**, **recall 0.85**, or rises above a **false-positive rate of 0.10**. A wrong rewrite counts as a false positive, and a corpus with no cases on one side of the label fails rather than scoring as perfect. Every misclassified case is listed by id.
+
+A new rewrite rule lands with at least one `rewrite` case and one `keep` case that pins where the rule must stop.
 
 ### Updating dependencies
 
@@ -552,6 +559,8 @@ As of `eslint-plugin-tailwindcss` 4.x, that group table lives in NormWind's own 
 - **Gate on changed lines only**: `--diff-base <ref>` (CLI) and `changed-lines-only` / `diff-base` (Action) report, annotate, write SARIF for, and fail on only the findings on lines a change adds or edits, relative to the merge base with `<ref>`. Turning the audit on in an existing codebase no longer floods the first pull request with findings nobody touched; the CLI counts the rest on stderr and the Action's JSON report still lists every finding. With changed-lines gating on, the Action's `finding-count` and `exit-code` outputs describe the gated findings.
 
 - **Per-file count baseline (`--baseline`, `--update-baseline`, Action `baseline` input)**: adopt NormWind in CI on a codebase that already has findings. A file may keep the findings it had when the baseline was recorded; a new one fails, and a count that drops fails until the baseline is lowered, so the debt only goes down. `--update-baseline` creates the file once and afterwards refuses to raise any count. See [Adopting on an existing codebase](#adopting-on-an-existing-codebase).
+
+- **Rewrite-precision gate** (development gate): a labelled corpus of must-rewrite and must-not-rewrite class strings now runs through the CLI on every `npm test`, and the suite fails when aggregate precision, recall, or false-positive rate crosses a fixed floor (`npm run test:precision`). Nothing about scanning or `--fix` changes.
 
 </details>
 

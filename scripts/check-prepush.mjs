@@ -25,6 +25,7 @@ const NODE_BIN = process.execPath;
 const NORMWIND_BIN = path.join(REPO_ROOT, "bin", "normwind.mjs");
 const REGRESSION_SCRIPT = path.join(REPO_ROOT, "scripts", "check-regression.mjs");
 const COMPARE_SCRIPT = path.join(REPO_ROOT, "scripts", "check-compare.mjs");
+const PRECISION_SCRIPT = path.join(REPO_ROOT, "scripts", "check-precision.mjs");
 const SNAPSHOT_JSON = path.join(REPO_ROOT, "docs", "reference", "canonical-replacements.json");
 const SNAPSHOT_MD = path.join(REPO_ROOT, "docs", "reference", "canonical-replacements.md");
 
@@ -90,6 +91,7 @@ addCheck("package metadata", async () => {
     assert(pkg.scripts?.["canonical:check"], "canonical:check script is missing");
     assert(pkg.scripts?.["test:regression"], "test:regression script is missing");
     assert(pkg.scripts?.["test:compare"], "test:compare script is missing");
+    assert(pkg.scripts?.["test:precision"], "test:precision script is missing");
 });
 
 addCheck("workflow and release hardening", async () => {
@@ -188,6 +190,18 @@ addCheck("regression fixtures", async () => {
     assert(
         result.stdout.includes(`${expected} fixtures, 0 failures.`),
         `regression summary did not report ${expected} clean fixtures\n${result.stdout}`,
+    );
+});
+
+// WHY: the fixtures pin individual outcomes; this pins the aggregate. A rule
+// that starts rewriting what it should leave alone fails here on its false
+// positive rate even when no single fixture covers the new mistake.
+addCheck("rewrite precision gate", async () => {
+    const result = await run(NODE_BIN, [PRECISION_SCRIPT]);
+    assert(result.ok, `test:precision failed\n${result.stdout}\n${result.stderr}`);
+    assert(
+        /\d+ labelled cases, 0 gate failures\./.test(result.stdout),
+        `precision summary did not report a clean gate\n${result.stdout}`,
     );
 });
 
