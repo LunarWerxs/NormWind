@@ -60,7 +60,9 @@ Both `normwind` and `normwinds` command names are exposed.
     npx @lunawerx/normwind src                  # scope to a folder or glob
 
 Other flags: `--reporter <text|json|sarif>` (SARIF 2.1.0 for GitHub code scanning),
-`--ignore <glob>` (repeatable), `--allow-empty`, `--extract-canonical
+`--ignore <glob>` (repeatable), `--allow-empty`, `--baseline <file>` (per-file finding
+counts: only findings beyond a file's count fail, and a dropped count must be lowered)
+with `--update-baseline` (creates the file, then only lowers counts), `--extract-canonical
 --write-canonical-files`, `--check-canonical`, `--cleanup-canonical-files`,
 `--suggest-named-theme-vars --theme-css <path>` (opt-in, off by default).
 
