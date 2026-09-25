@@ -16,6 +16,7 @@ import {
     saveDiskCache,
 } from "../lib/canonical-cache.mjs";
 import { cleanupCanonicalArtifacts, extractCanonicalReplacements } from "../lib/canonical-extract.mjs";
+import { partitionFindingsByChangedLines, readChangedLines } from "../lib/changed-lines.mjs";
 import { extractClassLikeStrings } from "../lib/class-extraction.mjs";
 import { parseArgs, printHelp } from "../lib/cli-args.mjs";
 import { FILE_SCAN_CONCURRENCY, runWithConcurrency } from "../lib/concurrency.mjs";
@@ -520,6 +521,7 @@ async function handleEarlyExit({
     checkCanonical,
     extractCanonical,
     cleanupCanonicalFiles,
+    diffBase,
 }) {
     if (help) {
         printHelp();
@@ -572,6 +574,13 @@ async function handleEarlyExit({
         process.exitCode = 2;
         return true;
     }
+    if (maintenanceMode && diffBase) {
+        console.error(
+            "normwinds: --diff-base cannot be combined with --check-canonical, --extract-canonical, or --cleanup-canonical-files.",
+        );
+        process.exitCode = 2;
+        return true;
+    }
     if (dryRun && !fix) {
         console.error("normwinds: --dry-run only applies with --fix or --fixall.");
         process.exitCode = 2;
@@ -602,7 +611,7 @@ async function handleEarlyExit({
 
 // Print the scan report in the requested format (sarif/json/text). Split out
 // of main's reporter if/else-if/else chain.
-function printScanReport(reporter, findings, lintedFiles) {
+function printScanReport(reporter, findings, lintedFiles, diffGate = null) {
     if (reporter === "sarif") {
         console.log(JSON.stringify(buildSarifReport(findings, lintedFiles, {
             version: NORMWINDS_VERSION,
@@ -617,6 +626,9 @@ function printScanReport(reporter, findings, lintedFiles) {
                     lintedFiles,
                     findingCount: findings.length,
                     findings,
+                    ...(diffGate
+                        ? { diffBase: diffGate.diffBase, unchangedLineFindingCount: diffGate.unchangedCount }
+                        : {}),
                 },
                 null,
                 2,
@@ -633,6 +645,7 @@ async function main() {
         allowEmpty,
         checkCanonical,
         cleanupCanonicalFiles,
+        diffBase,
         dryRun,
         extractCanonical,
         fix,
@@ -663,6 +676,19 @@ async function main() {
     if (extractCanonical) {
         await extractCanonicalReplacements({ writeFiles: writeCanonicalFiles });
         return;
+    }
+
+    // Read the diff before scanning so a missing ref or a non-git directory
+    // fails fast instead of after a full audit.
+    let changedLines = null;
+    if (diffBase) {
+        try {
+            changedLines = await readChangedLines(diffBase, { cwd: process.cwd() });
+        } catch (error) {
+            console.error(`normwinds: --diff-base: ${error?.message || String(error)}`);
+            process.exitCode = 2;
+            return;
+        }
     }
 
     await loadIgnoreConfig(ignorePatterns);
@@ -698,17 +724,33 @@ async function main() {
 
     const scanResult = await collectStaticShorthandFindings(filePaths, { suggestNamedThemeVars, themeCssPath });
     const {
-        findings,
+        findings: allFindings,
         lintedFiles,
         skipped: scanSkipped,
         failures: scanFailures,
     } = scanResult;
+    let findings = allFindings;
+    let diffGate = null;
+    if (changedLines) {
+        const { changed, unchanged } = partitionFindingsByChangedLines(
+            allFindings,
+            changedLines,
+            (finding) => path.resolve(process.cwd(), finding.filePath),
+        );
+        findings = changed;
+        diffGate = { diffBase, unchangedCount: unchanged.length };
+        if (unchanged.length > 0) {
+            console.error(
+                `normwinds: --diff-base ${diffBase}: ${unchanged.length} finding(s) on unchanged lines not reported (run without --diff-base to list them).`,
+            );
+        }
+    }
     printScanIssueSummary(scanSkipped, scanFailures);
     const scanIssues = scanSkipped.length + scanFailures.length;
 
     await saveDiskCache();
 
-    printScanReport(reporter, findings, lintedFiles);
+    printScanReport(reporter, findings, lintedFiles, diffGate);
 
     // Exit 2 distinguishes a partial-failure run (some files couldn't be written)
     // from a clean audit (0) or one that merely found lint issues (1), so CI can

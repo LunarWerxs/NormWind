@@ -6,6 +6,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { partitionFindingsByChangedLines, readChangedLines } from "../lib/changed-lines.mjs";
 
 const execFileAsync = promisify(execFile);
 const ACTION_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -176,6 +177,48 @@ function buildSarifFromPayload(payload) {
     };
 }
 
+// changed-lines-only needs a base to diff against. On a pull_request event
+// GitHub names the target branch in GITHUB_BASE_REF; anywhere else the
+// workflow must say which ref to use, because guessing would gate the wrong
+// lines.
+function resolveDiffBase() {
+    const explicit = core.getInput("diff-base").trim();
+    if (explicit) {
+        return explicit;
+    }
+    const baseRef = process.env.GITHUB_BASE_REF?.trim();
+    if (baseRef) {
+        return `origin/${baseRef}`;
+    }
+    throw new Error('Input "changed-lines-only" needs "diff-base" outside a pull_request event.');
+}
+
+// Keeps only findings on changed lines, so annotations, the SARIF file, the
+// outputs and the exit code gate new code alone. The runner's JSON report
+// keeps every finding, so the older debt stays on record. The diff is read
+// here rather than in the scanner, whose environment is scrubbed of PATH.
+async function gateToChangedLines(payload, execution, { diffBase, workingDirectory }) {
+    let lookup;
+    try {
+        lookup = await readChangedLines(diffBase, { cwd: workingDirectory });
+    } catch (error) {
+        throw new Error(
+            `changed-lines-only could not diff against "${diffBase}" (check out with fetch-depth: 0): ${error?.message || String(error)}`,
+        );
+    }
+    const { changed, unchanged } = partitionFindingsByChangedLines(
+        payload.findings,
+        lookup,
+        (finding) => path.resolve(workingDirectory, String(finding?.filePath ?? "")),
+    );
+    const exitCode = execution.exitCode === 1 && changed.length === 0 ? 0 : execution.exitCode;
+    return {
+        gatedPayload: { ...payload, findingCount: changed.length, findings: changed },
+        gatedExecution: { ...execution, exitCode },
+        unchangedCount: unchanged.length,
+    };
+}
+
 function parseCliPayload(stdout) {
     const trimmed = String(stdout ?? "").trim();
     if (!trimmed) {
@@ -281,7 +324,7 @@ async function writeReport(payload) {
     return reportPath;
 }
 
-async function writeSummary(payload, findings, exitCode, annotatedCount) {
+async function writeSummary(payload, findings, exitCode, annotatedCount, unchangedCount = 0) {
     const result = exitCode === 0 ? "Clean" : exitCode === 1 ? "Findings" : "Incomplete";
     core.summary
         .addHeading("NormWind Tailwind audit", 2)
@@ -294,6 +337,12 @@ async function writeSummary(payload, findings, exitCode, annotatedCount) {
             ],
             [result, String(payload.lintedFiles), String(payload.findingCount), escapeHtml(payload.version)],
         ]);
+
+    if (unchangedCount > 0) {
+        core.summary.addRaw(
+            `\n${unchangedCount} finding(s) on unchanged lines were not gated; they remain in the JSON report.\n`,
+        );
+    }
 
     if (findings.length > 0) {
         const rows = findings.slice(0, 100).map((finding) => [
@@ -370,6 +419,8 @@ export async function runAction() {
         const failOnFindings = parseBooleanInput("fail-on-findings", true);
         const suggestNamedThemeVars = parseBooleanInput("suggest-named-theme-vars", false);
         const maxAnnotations = parseIntegerInput("max-annotations", 10, { min: 0, max: 50 });
+        const changedLinesOnly = parseBooleanInput("changed-lines-only", false);
+        const diffBase = changedLinesOnly ? resolveDiffBase() : "";
         const themeCss = await resolveThemeCss(core.getInput("theme-css").trim(), {
             workspace,
             workingDirectory,
@@ -399,14 +450,25 @@ export async function runAction() {
         if (execution.exitCode !== 0 && !String(execution.stdout).trim()) {
             throw new Error(conciseError(execution.stderr));
         }
-        const payload = parseCliPayload(execution.stdout);
+        const fullPayload = parseCliPayload(execution.stdout);
+        const reportPath = await writeReport(fullPayload);
+        let payload = fullPayload;
+        let gatedExecution = execution;
+        let unchangedCount = 0;
+        if (changedLinesOnly) {
+            ({ gatedPayload: payload, gatedExecution, unchangedCount } = await gateToChangedLines(
+                fullPayload,
+                execution,
+                { diffBase, workingDirectory },
+            ));
+            core.info(`Gating on lines changed since ${diffBase}: ${unchangedCount} finding(s) on unchanged lines not gated.`);
+        }
         const findings = payload.findings.map((finding) => normalizeFinding(finding, { workspace, workingDirectory }));
-        const reportPath = await writeReport(payload);
 
         core.setOutput("version", payload.version);
         core.setOutput("finding-count", payload.findingCount);
         core.setOutput("linted-files", payload.lintedFiles);
-        core.setOutput("exit-code", execution.exitCode);
+        core.setOutput("exit-code", gatedExecution.exitCode);
         core.setOutput("report-path", reportPath);
 
         if (sarifFile) {
@@ -424,9 +486,9 @@ export async function runAction() {
             });
         }
 
-        await writeSummary(payload, findings, execution.exitCode, annotatedCount);
+        await writeSummary(payload, findings, gatedExecution.exitCode, annotatedCount, unchangedCount);
 
-        if (reportExecutionOutcome(execution, payload, failOnFindings)) {
+        if (reportExecutionOutcome(gatedExecution, payload, failOnFindings)) {
             return;
         }
 
