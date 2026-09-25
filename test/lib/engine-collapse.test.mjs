@@ -76,3 +76,21 @@ test("engine collapse never counts an unknown class as a merge source", () => {
     const { merges } = computeCollapseMerges(designSystem, ["card", "px-4", "py-4"]);
     assert.deepStrictEqual(merges, [{ target: "p-4", sources: ["px-4", "py-4"] }]);
 });
+
+// WHY: the real engine may pass an unknown class through, which would let the
+// test above pass without the `known` filter. This stub engine drops it from
+// its output, the shape in which a missing filter would hand "card" to --fix
+// as a merge source.
+test("engine collapse ignores an unknown class the engine drops", () => {
+    const stub = {
+        canonicalizeCandidates: (list) => {
+            const kept = list.filter((utility) => utility !== "card");
+            return kept.includes("px-4") && kept.includes("py-4")
+                ? ["p-4", ...kept.filter((utility) => utility !== "px-4" && utility !== "py-4")]
+                : kept;
+        },
+        candidatesToCss: (list) => list.map((utility) => (utility === "card" ? null : `.${utility}{}`)),
+    };
+    const { merges } = computeCollapseMerges(stub, ["card", "px-4", "py-4"]);
+    assert.deepStrictEqual(merges, [{ target: "p-4", sources: ["px-4", "py-4"] }]);
+});
