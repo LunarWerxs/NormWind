@@ -7,6 +7,7 @@ name: copy budget
 
 on:
   push:
+    branches: [main]
     paths:
       - '**/index.html'
       - 'scripts/copy-budget.*'
@@ -17,8 +18,13 @@ on:
       - 'scripts/copy-budget.*'
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
