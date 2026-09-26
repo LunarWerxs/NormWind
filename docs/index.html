@@ -1055,13 +1055,29 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
     }
     return 0;
   }
-  function skin() { try { if (luminance() > 0.55) el.classList.add('lwdc-light'); } catch (e) {} }
+  function skin() { try { if (luminance() > 0.55) el.classList.add('lwdc-light'); } catch (e) { /* no readable page colour: keep the dark skin */ } }
 
-  setTimeout(function () {
+  /* WAITS FOR A SCROLL, like the studio site's badge (DiscordBadge.vue). It used
+     to appear 1.4s after paint, on the first screenful, while the visitor was
+     still reading what the product is: four of five simulated visitors on the
+     ZergSwarm page called it an interruption (2026-09-26). Arriving once they
+     have started reading makes it an offer instead. A page too short to scroll
+     keeps the old timer, or the badge could never appear. */
+  var SCROLL_BEFORE_SHOWING = 400;
+  var shown = false;
+  function show() {
+    if (shown) return;
+    shown = true;
+    window.removeEventListener('scroll', onScroll);
     skin();
     el.hidden = false;
     // Next frame, so the transition has a start state to move from.
     requestAnimationFrame(function () { el.classList.add('lwdc-in'); });
+  }
+  function onScroll() { if (window.scrollY >= SCROLL_BEFORE_SHOWING) show(); }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  setTimeout(function () {
+    if (document.documentElement.scrollHeight <= window.innerHeight + SCROLL_BEFORE_SHOWING) show();
   }, 1400);
 
   // Re-measure if the page's own theme flips underneath us.
