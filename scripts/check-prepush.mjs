@@ -136,10 +136,7 @@ addCheck("canonical snapshot integrity", async () => {
     assert(markdown.includes("npm run canonical:check"), "canonical markdown should document canonical:check");
 });
 
-addCheck("canonical drift check", async () => {
-    const result = await run(NODE_BIN, [NORMWIND_BIN, "--check-canonical"]);
-    assert(result.ok, `canonical:check failed\n${result.stdout}\n${result.stderr}`);
-});
+// The drift check itself is `npm run canonical:check`, which `npm test` runs before this script.
 
 addCheck("check-canonical failure path", async () => {
     // --check-canonical compares against <cwd>/docs/reference/*, so this

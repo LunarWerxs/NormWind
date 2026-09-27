@@ -31,7 +31,7 @@
     "canonical:extract": "node bin/normwind.mjs --extract-canonical --write-canonical-files",
     "canonical:check": "node bin/normwind.mjs --check-canonical",
     "deps:sync": "bun install && npm ci && npm run build:action",
-    "test": "node --test && node scripts/check-prepush.mjs && node scripts/check-action.mjs",
+    "test": "node --test && npm run canonical:check && node scripts/check-prepush.mjs && node scripts/check-action.mjs",
     "prepush": "npm test",
     "test:action": "node scripts/check-action.mjs",
     "test:regression": "node scripts/check-regression.mjs",
