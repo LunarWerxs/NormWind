@@ -68,8 +68,9 @@ async function listFiles(root) {
 // carries the full rule and makes git refuse to invent a merge result here.
 const STALE_AFTER_MERGE_HINT =
     "\n\nIf you just merged or rebased: dist/ is GENERATED, so a conflict here is never resolved "
-    + "by keeping either side. Rebuild it -- `npm run build:action && git add dist/` -- and note "
-    + "that the bundle can change even when the source edit looks irrelevant to it.";
+    + "by keeping either side. Rebuild it from a clean install -- `npm run deps:sync && git add dist/` "
+    + "(ncc's module ids follow the node_modules layout, so only a fresh `npm ci` reproduces CI's "
+    + "bytes) -- and note that the bundle can change even when the source edit looks irrelevant to it.";
 
 async function compareDirectories(expected, actual) {
     const expectedFiles = await listFiles(expected);
