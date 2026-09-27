@@ -13,7 +13,8 @@ What it does:
     0. Pre-flight (no mutation): runs the complete npm test gate and validates
        git state (on main, clean tree, not behind origin/main) and GitHub
        credentials.
-    1. Bumps the version in package.json and syncs package-lock.json, then
+    1. Bumps the version in package.json, syncs package-lock.json and the
+       version the site states (docs/index.html, docs/llms-full.txt), then
        runs `npm publish --dry-run` at the new version to catch npm
        packaging/version-collision problems before anything is pushed (the
        bump is restored if the dry-run fails).
@@ -52,6 +53,15 @@ ROOT = Path(__file__).resolve().parent.parent  # repo root
 PACKAGE_JSON = ROOT / "package.json"
 README_FILE = ROOT / "README.md"
 ENV_FILE = ROOT / ".env"
+
+# Where the site says which version npx installs. Nothing moved these on release, so the site
+# said v3.8.0 for weeks after 3.8.1 shipped; the bump now rewrites them with package.json.
+SITE_VERSION_SPOTS = [
+    (ROOT / "docs" / "index.html", re.compile(r'("softwareVersion": ")\d+\.\d+\.\d+(")')),
+    (ROOT / "docs" / "index.html", re.compile(r"(@lunawerx/normwind · v)\d+\.\d+\.\d+( ·)")),
+    (ROOT / "docs" / "llms-full.txt", re.compile(r"(\(current version )\d+\.\d+\.\d+(,)")),
+]
+SITE_VERSION_FILES = sorted({str(path.relative_to(ROOT).as_posix()) for path, _ in SITE_VERSION_SPOTS})
 
 GITHUB_REPO = "LunarWerxs/NormWind"
 NPM_REGISTRY = "https://registry.npmjs.org/"
@@ -353,7 +363,22 @@ def bump_version(new_version: str) -> str:
     print("  Syncing package-lock.json (npm install --package-lock-only)")
     _npm_run(["install", "--package-lock-only"])
 
+    sync_site_version(new_version)
     return old_version
+
+
+def sync_site_version(new_version: str) -> None:
+    """Write `new_version` into every spot the site names the version; a spot that is gone fails loudly."""
+    texts: dict[Path, str] = {}
+    for path, pattern in SITE_VERSION_SPOTS:
+        text = texts.get(path) or path.read_text(encoding="utf-8")
+        text, hits = pattern.subn(lambda m: f"{m.group(1)}{new_version}{m.group(2)}", text)
+        if hits != 1:
+            sys.exit(f"{path.relative_to(ROOT)}: expected one version spot for {pattern.pattern!r}, found {hits}")
+        texts[path] = text
+    for path, text in texts.items():
+        path.write_text(text, encoding="utf-8", newline="")
+    print(f"  Site version -> {new_version} ({', '.join(SITE_VERSION_FILES)})")
 
 
 def git_commit_tag_push(new_version: str, message: str, github_pat: str) -> None:
@@ -362,7 +387,7 @@ def git_commit_tag_push(new_version: str, message: str, github_pat: str) -> None
     # The tree was clean at preflight and the release only owns these files.
     # Staging everything could accidentally commit an unrelated file created
     # by an editor or background process after that check.
-    run(["git", "add", "--", "package.json", "package-lock.json"])
+    run(["git", "add", "--", "package.json", "package-lock.json", *SITE_VERSION_FILES])
     run(["git", "commit", "-m", message])
 
     tag = f"v{new_version}"
@@ -634,10 +659,10 @@ def main() -> None:
         bump_version(new_version)
         npm_dry_run(npm_token)
     except SystemExit:
-        run(["git", "restore", "--", "package.json", "package-lock.json"])
+        run(["git", "restore", "--", "package.json", "package-lock.json", *SITE_VERSION_FILES])
         print(
             "Version preparation or npm publish dry-run failed. Restored package.json / "
-            "package-lock.json; nothing was pushed or published.",
+            "package-lock.json and the site's version; nothing was pushed or published.",
             file=sys.stderr,
         )
         raise

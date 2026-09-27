@@ -443,15 +443,15 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
           "description": "A zero-config CLI and GitHub Action that finds bloated Tailwind utility classes and rewrites them into their short, canonical form. Every rewrite comes from Tailwind's own engine, never a stylistic guess.",
           "applicationCategory": "DeveloperApplication",
           "operatingSystem": "Windows, macOS, Linux",
-          "softwareVersion": "3.8.0",
+          "softwareVersion": "3.8.1",
           "url": "https://normwind.lunarwerx.com/",
           "downloadUrl": "https://www.npmjs.com/package/@lunawerx/normwind",
           "softwareHelp": "https://github.com/LunarWerxs/NormWind",
           "image": "https://normwind.lunarwerx.com/assets/og-image.png",
           "featureList": [
             "Audit mode (normwind): reports every finding with file and line, exits 1 when findings exist",
-            "--fix: rewrites .vue files and re-runs the audit, with per-file fault isolation",
-            "--fixall: applies the same rewrites across the whole codebase (Vue, JS, MJS, TS, JSX, TSX)",
+            "--fix: rewrites markup files (Vue, Svelte, Astro, HTML) and re-runs the audit, with per-file fault isolation",
+            "--fixall: applies the same rewrites across every supported file type (markup plus JS, MJS, CJS, TS, JSX, TSX, MTS, CTS)",
             "--dry-run: shows which files would be rewritten without touching disk",
             "--json: machine-readable findings for CI dashboards and custom reporters",
             "Scope by folder or glob, or run with no arguments to scan the whole project",
@@ -608,7 +608,7 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
   <section class="hero container" aria-labelledby="hero-heading">
     <div class="hero-grid">
       <div>
-        <p class="eyebrow">@lunawerx/normwind · v3.8.0 · node 22+</p>
+        <p class="eyebrow">@lunawerx/normwind · v3.8.1 · node 22+</p>
         <h1 id="hero-heading">Your Tailwind classes are longer <span class="accent">than Tailwind needs them to be.</span></h1>
         <p class="hero-sub">A zero-config CLI and GitHub Action that rewrites bloated utility strings into their canonical short form.</p>
         <div class="hero-actions">
@@ -747,12 +747,12 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
         <div class="card">
           <div class="card-icon">✓</div>
           <h3><code>--fix</code></h3>
-          <p>The safe default. Rewrites <code class="cls">.vue</code> files then re-audits, with per-file fault isolation.</p>
+          <p>The safe default. Rewrites markup files (<code class="cls">.vue</code>, <code class="cls">.svelte</code>, <code class="cls">.astro</code>, <code class="cls">.html</code>) then re-audits, with per-file fault isolation.</p>
         </div>
         <div class="card deep">
           <div class="card-icon">↔</div>
           <h3><code>--fixall</code></h3>
-          <p>The whole codebase: Vue, JS, MJS, TS, JSX, TSX. Same transforms, wider reach, one pass.</p>
+          <p>The whole codebase: markup plus JS, MJS, CJS, TS, JSX, TSX, MTS, CTS. Same transforms, wider reach, one pass.</p>
         </div>
         <div class="card deep">
           <div class="card-icon">👁</div>
