@@ -28,7 +28,6 @@
   ],
   "scripts": {
     "build:action": "node scripts/build-action.mjs",
-    "build:action:check": "node scripts/build-action.mjs --check",
     "canonical:extract": "node bin/normwind.mjs --extract-canonical --write-canonical-files",
     "canonical:check": "node bin/normwind.mjs --check-canonical",
     "deps:sync": "bun install && npm ci && npm run build:action",

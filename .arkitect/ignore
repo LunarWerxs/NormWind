@@ -1,0 +1,3 @@
+# Tracked trees that are not this repository's own source. The Architect skips each (one repo-relative path per line).
+# NormWind's own test corpus: every fixture holds the non-canonical classes the tests prove the rewriter handles
+test/fixtures

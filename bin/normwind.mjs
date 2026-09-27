@@ -505,149 +505,136 @@ function printTextReport(findings, lintedFiles) {
     console.log("\nRun with --fix (or --fixall) to apply safe rewrites automatically.");
 }
 
+// The maintenance modes return before any scanning happens.
+function isMaintenanceMode({ checkCanonical, extractCanonical, cleanupCanonicalFiles }) {
+    return checkCanonical || extractCanonical || cleanupCanonicalFiles;
+}
+
+// Each find*Error helper below returns the usage error to print, or null when
+// its checks pass. They run in main()'s original validation order.
+function findFlagInputError({ unknownFlags, missingValueFlags, invalidReporter, suggestNamedThemeVars, themeCssPath }) {
+    if (unknownFlags.length > 0) {
+        return `normwinds: unknown flag(s): ${unknownFlags.join(", ")}\n`
+            + "Run `normwinds --help` for the list of supported flags.";
+    }
+    if (missingValueFlags.length > 0) {
+        return `normwinds: ${missingValueFlags.join(", ")} requires a value (e.g. --theme-css src/assets/main.css).`;
+    }
+    if (invalidReporter !== null) {
+        return `normwinds: unknown --reporter "${invalidReporter}". Supported: text, json, sarif.`;
+    }
+    if (suggestNamedThemeVars && !themeCssPath) {
+        return "normwinds: --suggest-named-theme-vars requires --theme-css <path-to-project-tailwind.css>.";
+    }
+    return null;
+}
+
+// Pairing a maintenance mode with scan-time flags used to drop those flags in silence.
+function findMaintenanceFixError(maintenanceMode, { fix, dryRun }) {
+    if (maintenanceMode && (fix || dryRun)) {
+        return "normwinds: --fix/--fixall/--dry-run cannot be combined with --check-canonical, --extract-canonical, or --cleanup-canonical-files.";
+    }
+    return null;
+}
+
+function findDiffBaseFlagError(maintenanceMode, { diffBase }) {
+    if (diffBase !== null && !diffBase.trim()) {
+        return "normwinds: --diff-base requires a ref (e.g. --diff-base origin/main).";
+    }
+    if (maintenanceMode && diffBase !== null) {
+        return "normwinds: --diff-base cannot be combined with --check-canonical, --extract-canonical, or --cleanup-canonical-files.";
+    }
+    return null;
+}
+
+function findDryRunError({ dryRun, fix }) {
+    if (dryRun && !fix) {
+        return "normwinds: --dry-run only applies with --fix or --fixall.";
+    }
+    return null;
+}
+
+function findBaselineFlagError(maintenanceMode, { baselinePath, updateBaseline }) {
+    if (maintenanceMode && (baselinePath || updateBaseline)) {
+        return "normwinds: --baseline/--update-baseline cannot be combined with --check-canonical, --extract-canonical, or --cleanup-canonical-files.";
+    }
+    if (updateBaseline && !baselinePath) {
+        return "normwinds: --update-baseline requires --baseline <file>.";
+    }
+    return null;
+}
+
+function findFlagCombinationError(options) {
+    const maintenanceMode = isMaintenanceMode(options);
+    return findMaintenanceFixError(maintenanceMode, options)
+        ?? findDiffBaseFlagError(maintenanceMode, options)
+        ?? findDryRunError(options)
+        ?? findBaselineFlagError(maintenanceMode, options);
+}
+
+// A --baseline that is missing or malformed fails up front: treating it as
+// empty would fail every legacy finding at once, and there is no safe
+// permissive reading of a broken file. Only --update-baseline may create it.
+async function findBaselineFileError({ baselinePath, updateBaseline }) {
+    if (!baselinePath) {
+        return null;
+    }
+    try {
+        const { exists } = await readBaselineFile(baselinePath);
+        if (!exists && !updateBaseline) {
+            return `normwinds: --baseline "${baselinePath}" does not exist. Create it once with --baseline "${baselinePath}" --update-baseline.`;
+        }
+    } catch (error) {
+        const reason = error?.message || String(error);
+        return reason.startsWith("normwinds:") ? reason : `normwinds: failed to read --baseline "${baselinePath}": ${reason}`;
+    }
+    return null;
+}
+
+// An explicitly-requested --theme-css that cannot be loaded is a
+// misconfiguration, not a degraded mode: fail loud up front instead of
+// silently disabling the feature for the whole run. The resolver promise
+// is cached, so this costs nothing when the path is valid.
+async function findThemeCssError(options) {
+    const { themeCssPath } = options;
+    if (!themeCssPath || isMaintenanceMode(options)) {
+        return null;
+    }
+    try {
+        await getThemeVarResolver({ themeCssPath });
+    } catch (error) {
+        const reason = error?.message || String(error);
+        return reason.startsWith("normwinds:")
+            ? reason
+            : `normwinds: failed to load --theme-css "${themeCssPath}": ${reason}`;
+    }
+    return null;
+}
+
 // Handle every early-return branch of main() that needs no file scan:
 // --help/--version, argument validation errors, and the --theme-css
 // preflight check. Returns true when the caller should return immediately.
-// Split out of main's long flat sequence of validation ifs.
-async function handleEarlyExit({
-    help,
-    version,
-    unknownFlags,
-    missingValueFlags,
-    invalidReporter,
-    suggestNamedThemeVars,
-    themeCssPath,
-    fix,
-    dryRun,
-    checkCanonical,
-    extractCanonical,
-    cleanupCanonicalFiles,
-    diffBase,
-    baselinePath,
-    updateBaseline,
-}) {
-    if (help) {
+async function handleEarlyExit(options) {
+    if (options.help) {
         printHelp();
         return true;
     }
 
-    if (version) {
+    if (options.version) {
         console.log(NORMWINDS_VERSION);
         return true;
     }
 
-    if (unknownFlags.length > 0) {
-        console.error(`normwinds: unknown flag(s): ${unknownFlags.join(", ")}`);
-        console.error("Run `normwinds --help` for the list of supported flags.");
-        process.exitCode = 2;
-        return true;
+    const error = findFlagInputError(options)
+        ?? findFlagCombinationError(options)
+        ?? (await findBaselineFileError(options))
+        ?? (await findThemeCssError(options));
+    if (error === null) {
+        return false;
     }
-
-    if (missingValueFlags.length > 0) {
-        console.error(
-            `normwinds: ${missingValueFlags.join(", ")} requires a value (e.g. --theme-css src/assets/main.css).`,
-        );
-        process.exitCode = 2;
-        return true;
-    }
-
-    if (invalidReporter !== null) {
-        console.error(
-            `normwinds: unknown --reporter "${invalidReporter}". Supported: text, json, sarif.`,
-        );
-        process.exitCode = 2;
-        return true;
-    }
-
-    if (suggestNamedThemeVars && !themeCssPath) {
-        console.error(
-            "normwinds: --suggest-named-theme-vars requires --theme-css <path-to-project-tailwind.css>.",
-        );
-        process.exitCode = 2;
-        return true;
-    }
-
-    // The maintenance modes below return before any scanning happens, so
-    // pairing them with scan-time flags used to drop those flags in silence.
-    const maintenanceMode = checkCanonical || extractCanonical || cleanupCanonicalFiles;
-    if (maintenanceMode && (fix || dryRun)) {
-        console.error(
-            "normwinds: --fix/--fixall/--dry-run cannot be combined with --check-canonical, --extract-canonical, or --cleanup-canonical-files.",
-        );
-        process.exitCode = 2;
-        return true;
-    }
-    if (diffBase !== null && !diffBase.trim()) {
-        console.error("normwinds: --diff-base requires a ref (e.g. --diff-base origin/main).");
-        process.exitCode = 2;
-        return true;
-    }
-    if (maintenanceMode && diffBase !== null) {
-        console.error(
-            "normwinds: --diff-base cannot be combined with --check-canonical, --extract-canonical, or --cleanup-canonical-files.",
-        );
-        process.exitCode = 2;
-        return true;
-    }
-    if (dryRun && !fix) {
-        console.error("normwinds: --dry-run only applies with --fix or --fixall.");
-        process.exitCode = 2;
-        return true;
-    }
-    if (maintenanceMode && (baselinePath || updateBaseline)) {
-        console.error(
-            "normwinds: --baseline/--update-baseline cannot be combined with --check-canonical, --extract-canonical, or --cleanup-canonical-files.",
-        );
-        process.exitCode = 2;
-        return true;
-    }
-    if (updateBaseline && !baselinePath) {
-        console.error("normwinds: --update-baseline requires --baseline <file>.");
-        process.exitCode = 2;
-        return true;
-    }
-
-    // A --baseline that is missing or malformed fails up front: treating it as
-    // empty would fail every legacy finding at once, and there is no safe
-    // permissive reading of a broken file. Only --update-baseline may create it.
-    if (baselinePath) {
-        try {
-            const { exists } = await readBaselineFile(baselinePath);
-            if (!exists && !updateBaseline) {
-                console.error(
-                    `normwinds: --baseline "${baselinePath}" does not exist. Create it once with --baseline "${baselinePath}" --update-baseline.`,
-                );
-                process.exitCode = 2;
-                return true;
-            }
-        } catch (error) {
-            const reason = error?.message || String(error);
-            console.error(reason.startsWith("normwinds:") ? reason : `normwinds: failed to read --baseline "${baselinePath}": ${reason}`);
-            process.exitCode = 2;
-            return true;
-        }
-    }
-
-    // An explicitly-requested --theme-css that cannot be loaded is a
-    // misconfiguration, not a degraded mode: fail loud up front instead of
-    // silently disabling the feature for the whole run. The resolver promise
-    // is cached, so this costs nothing when the path is valid.
-    if (themeCssPath && !checkCanonical && !extractCanonical && !cleanupCanonicalFiles) {
-        try {
-            await getThemeVarResolver({ themeCssPath });
-        } catch (error) {
-            const reason = error?.message || String(error);
-            console.error(
-                reason.startsWith("normwinds:")
-                    ? reason
-                    : `normwinds: failed to load --theme-css "${themeCssPath}": ${reason}`,
-            );
-            process.exitCode = 2;
-            return true;
-        }
-    }
-
-    return false;
+    console.error(error);
+    process.exitCode = 2;
+    return true;
 }
 
 // Print the scan report in the requested format (sarif/json/text). Split out
@@ -682,162 +669,197 @@ function printScanReport(reporter, findings, lintedFiles, { diffGate = null, bas
     }
 }
 
-async function main() {
-    const parsedArgs = parseArgs(process.argv.slice(2));
-    const {
-        allowEmpty,
-        baselinePath,
-        checkCanonical,
-        cleanupCanonicalFiles,
-        diffBase,
-        dryRun,
-        extractCanonical,
-        fix,
-        fixAll,
-        ignorePatterns,
-        patterns,
-        reporter,
-        suggestNamedThemeVars,
-        themeCssPath,
-        updateBaseline,
-        writeCanonicalFiles,
-    } = parsedArgs;
-
-    if (await handleEarlyExit(parsedArgs)) {
-        return;
-    }
-
+// Run --cleanup-canonical-files / --check-canonical / --extract-canonical.
+// Returns true when one of them ran, so main() returns without scanning.
+async function runMaintenanceMode({ cleanupCanonicalFiles, checkCanonical, extractCanonical, writeCanonicalFiles }) {
     if (cleanupCanonicalFiles) {
         await cleanupCanonicalArtifacts();
         console.log(`normwinds v${NORMWINDS_VERSION}: removed canonical generated artifacts (if present).`);
-        return;
+        return true;
     }
 
     if (checkCanonical) {
         await extractCanonicalReplacements({ writeFiles: false, checkOnly: true });
-        return;
+        return true;
     }
 
     if (extractCanonical) {
         await extractCanonicalReplacements({ writeFiles: writeCanonicalFiles });
-        return;
+        return true;
     }
+
+    return false;
+}
+
+// Read the --diff-base changed lines. Returns { changedLines }, or null after
+// reporting the failure (exit 2) so the caller returns.
+async function readDiffBaseLines(diffBase) {
+    try {
+        return { changedLines: await readChangedLines(diffBase, { cwd: process.cwd() }) };
+    } catch (error) {
+        console.error(`normwinds: --diff-base: ${error?.message || String(error)}`);
+        process.exitCode = 2;
+        return null;
+    }
+}
+
+async function loadScanCaches() {
+    await loadDiskCache();
+    await loadCanonicalSnapshot();
+}
+
+async function loadTargetFiles(patterns, ignorePatterns) {
+    await loadIgnoreConfig(ignorePatterns);
+    const [filePaths] = await Promise.all([listTargetFiles(patterns), loadScanCaches()]);
+    return filePaths;
+}
+
+// Exit 2, not 0. A typo'd path in a CI step used to be indistinguishable
+// from a clean audit, so the job went green having scanned nothing.
+// Returns true when the caller should return.
+function stopOnEmptyMatch(patterns, filePaths, allowEmpty) {
+    if (patterns.length === 0 || filePaths.length > 0) {
+        return false;
+    }
+    console.error(
+        `normwinds: the given pattern(s) matched no lintable files: ${patterns.join(", ")}`,
+    );
+    console.error(
+        "Check the path, or pass --allow-empty if matching nothing is expected.",
+    );
+    if (allowEmpty) {
+        return false;
+    }
+    process.exitCode = 2;
+    return true;
+}
+
+// Apply --fix/--fixall. Returns { fixIssues, changedLines }, or null when
+// re-reading the diff failed (already reported) so the caller returns.
+async function runFixPass(filePaths, changedLines, { fixAll, suggestNamedThemeVars, themeCssPath, dryRun, diffBase }) {
+    const fixResult = await applyFixes(filePaths, { fixAll, suggestNamedThemeVars, themeCssPath, dryRun });
+    const fixIssues = fixResult.failed + fixResult.skipped;
+    // A fix can add or remove lines, which would shift later findings off
+    // the line numbers read above, so read the diff again after writing.
+    if (!changedLines || dryRun) {
+        return { fixIssues, changedLines };
+    }
+    const diff = await readDiffBaseLines(diffBase);
+    return diff ? { fixIssues, changedLines: diff.changedLines } : null;
+}
+
+// The count ratchet runs after the scan, on the finished finding list, so
+// every reporter and the exit code below see only what the baseline does
+// not already hold (new findings, plus notes for counts to lower).
+async function applyBaselineGate(findings, filePaths, scanIssues, { baselinePath, updateBaseline }) {
+    if (!baselinePath) {
+        return { findings, summary: null };
+    }
+    const baselineResult = await applyBaseline({
+        baselinePath,
+        update: updateBaseline,
+        findings,
+        scannedPaths: filePaths.map(toRelative),
+        scanComplete: scanIssues === 0,
+        ruleId: RULE_ID,
+    });
+    return { findings: baselineResult.findings, summary: baselineResult.summary };
+}
+
+function resolveFindingPath(finding) {
+    return path.resolve(process.cwd(), finding.filePath);
+}
+
+// Changed-line gating runs after the baseline, which has to count every
+// finding in a file to judge it; the gate then narrows what is reported.
+function applyDiffGate(findings, changedLines, diffBase, filePaths) {
+    if (!changedLines) {
+        return { findings, diffGate: null };
+    }
+    const { changed, unchanged } = partitionFindingsByChangedLines(
+        findings,
+        changedLines,
+        resolveFindingPath,
+    );
+    const scannedPaths = filePaths.map((filePath) => path.resolve(process.cwd(), filePath));
+    if (changedLines.size > 0 && countChangedFiles(changedLines, scannedPaths) === 0) {
+        console.error(
+            `normwinds: --diff-base ${diffBase}: git reports changed files, but none of the scanned files match them; check that the working directory path matches the repository path.`,
+        );
+    }
+    if (unchanged.length > 0) {
+        console.error(
+            `normwinds: --diff-base ${diffBase}: ${unchanged.length} finding(s) on unchanged lines not reported (run without --diff-base to list them).`,
+        );
+    }
+    return { findings: changed, diffGate: { diffBase, unchangedCount: unchanged.length } };
+}
+
+// Exit 2 distinguishes a partial-failure run (some files couldn't be written)
+// from a clean audit (0) or one that merely found lint issues (1), so CI can
+// tell the difference.
+function auditExitCode(fixIssues, scanIssues, findingCount) {
+    if (fixIssues > 0 || scanIssues > 0) {
+        return 2;
+    }
+    return findingCount > 0 ? 1 : 0;
+}
+
+async function runAudit(parsedArgs) {
+    const { allowEmpty, diffBase, fix, ignorePatterns, patterns, reporter, suggestNamedThemeVars, themeCssPath } = parsedArgs;
 
     // Read the diff before scanning so a missing ref or a non-git directory
     // fails fast instead of after a full audit.
     let changedLines = null;
     if (diffBase) {
-        try {
-            changedLines = await readChangedLines(diffBase, { cwd: process.cwd() });
-        } catch (error) {
-            console.error(`normwinds: --diff-base: ${error?.message || String(error)}`);
-            process.exitCode = 2;
+        const diff = await readDiffBaseLines(diffBase);
+        if (!diff) {
             return;
         }
+        changedLines = diff.changedLines;
     }
 
-    await loadIgnoreConfig(ignorePatterns);
-
-    const [filePaths] = await Promise.all([
-        listTargetFiles(patterns),
-        (async () => {
-            await loadDiskCache();
-            await loadCanonicalSnapshot();
-        })(),
-    ]);
-
-    if (patterns.length > 0 && filePaths.length === 0) {
-        // Exit 2, not 0. A typo'd path in a CI step used to be indistinguishable
-        // from a clean audit, so the job went green having scanned nothing.
-        console.error(
-            `normwinds: the given pattern(s) matched no lintable files: ${patterns.join(", ")}`,
-        );
-        console.error(
-            "Check the path, or pass --allow-empty if matching nothing is expected.",
-        );
-        if (!allowEmpty) {
-            process.exitCode = 2;
-            return;
-        }
+    const filePaths = await loadTargetFiles(patterns, ignorePatterns);
+    if (stopOnEmptyMatch(patterns, filePaths, allowEmpty)) {
+        return;
     }
 
     let fixIssues = 0;
     if (fix) {
-        const fixResult = await applyFixes(filePaths, { fixAll, suggestNamedThemeVars, themeCssPath, dryRun });
-        fixIssues = fixResult.failed + fixResult.skipped;
-        // A fix can add or remove lines, which would shift later findings off
-        // the line numbers read above, so read the diff again after writing.
-        if (changedLines && !dryRun) {
-            try {
-                changedLines = await readChangedLines(diffBase, { cwd: process.cwd() });
-            } catch (error) {
-                console.error(`normwinds: --diff-base: ${error?.message || String(error)}`);
-                process.exitCode = 2;
-                return;
-            }
+        const fixPass = await runFixPass(filePaths, changedLines, parsedArgs);
+        if (!fixPass) {
+            return;
         }
+        ({ fixIssues, changedLines } = fixPass);
     }
 
     const scanResult = await collectStaticShorthandFindings(filePaths, { suggestNamedThemeVars, themeCssPath });
-    const {
-        findings: allFindings,
-        lintedFiles,
-        skipped: scanSkipped,
-        failures: scanFailures,
-    } = scanResult;
-    let findings = allFindings;
+    const { lintedFiles, skipped: scanSkipped, failures: scanFailures } = scanResult;
     printScanIssueSummary(scanSkipped, scanFailures);
     const scanIssues = scanSkipped.length + scanFailures.length;
 
     await saveDiskCache();
 
-    // The count ratchet runs after the scan, on the finished finding list, so
-    // every reporter and the exit code below see only what the baseline does
-    // not already hold (new findings, plus notes for counts to lower).
-    let baselineSummary = null;
-    if (baselinePath) {
-        const baselineResult = await applyBaseline({
-            baselinePath,
-            update: updateBaseline,
-            findings,
-            scannedPaths: filePaths.map(toRelative),
-            scanComplete: scanIssues === 0,
-            ruleId: RULE_ID,
-        });
-        findings = baselineResult.findings;
-        baselineSummary = baselineResult.summary;
+    const baselined = await applyBaselineGate(scanResult.findings, filePaths, scanIssues, parsedArgs);
+    const { findings, diffGate } = applyDiffGate(baselined.findings, changedLines, diffBase, filePaths);
+
+    printScanReport(reporter, findings, lintedFiles, { diffGate, baseline: baselined.summary });
+
+    process.exitCode = auditExitCode(fixIssues, scanIssues, findings.length);
+}
+
+async function main() {
+    const parsedArgs = parseArgs(process.argv.slice(2));
+
+    if (await handleEarlyExit(parsedArgs)) {
+        return;
     }
 
-    // Changed-line gating runs after the baseline, which has to count every
-    // finding in a file to judge it; the gate then narrows what is reported.
-    let diffGate = null;
-    if (changedLines) {
-        const { changed, unchanged } = partitionFindingsByChangedLines(
-            findings,
-            changedLines,
-            (finding) => path.resolve(process.cwd(), finding.filePath),
-        );
-        findings = changed;
-        diffGate = { diffBase, unchangedCount: unchanged.length };
-        const scannedPaths = filePaths.map((filePath) => path.resolve(process.cwd(), filePath));
-        if (changedLines.size > 0 && countChangedFiles(changedLines, scannedPaths) === 0) {
-            console.error(
-                `normwinds: --diff-base ${diffBase}: git reports changed files, but none of the scanned files match them; check that the working directory path matches the repository path.`,
-            );
-        }
-        if (unchanged.length > 0) {
-            console.error(
-                `normwinds: --diff-base ${diffBase}: ${unchanged.length} finding(s) on unchanged lines not reported (run without --diff-base to list them).`,
-            );
-        }
+    if (await runMaintenanceMode(parsedArgs)) {
+        return;
     }
 
-    printScanReport(reporter, findings, lintedFiles, { diffGate, baseline: baselineSummary });
-
-    // Exit 2 distinguishes a partial-failure run (some files couldn't be written)
-    // from a clean audit (0) or one that merely found lint issues (1), so CI can
-    // tell the difference.
-    process.exitCode = fixIssues > 0 || scanIssues > 0 ? 2 : findings.length > 0 ? 1 : 0;
+    await runAudit(parsedArgs);
 }
 
 main().catch((error) => {
