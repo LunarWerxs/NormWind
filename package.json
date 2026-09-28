@@ -1,6 +1,6 @@
 {
   "name": "@lunawerx/normwind",
-  "version": "3.8.1",
+  "version": "4.0.0",
   "description": "Normalize Tailwinds: Tailwind shorthand audit, canonicalization checks, and safe autofix",
   "type": "module",
   "license": "MIT",
