@@ -554,9 +554,11 @@ As of `eslint-plugin-tailwindcss` 4.x, that group table lives in NormWind's own 
 ## 📜 Changelog
 
 <details>
-<summary><strong>Unreleased</strong></summary>
+<summary><strong>v4.0.0</strong>: 2026-09-27 · Node 22 floor, gate on changed lines only, per-file baseline, Tailwind collapse merges</summary>
 
 <br/>
+
+- **Breaking: Node 22 is now the minimum** (`^22.18.0 || >=24.11.0`). Node 20 reached end of life on 2026-04-30 and gets no security patches; an install on Node 20 now warns, and fails outright under `engine-strict`. Nothing else about how NormWind scans, reports or fixes depends on this, so if you are already on Node 22 or 24 the upgrade is a drop-in.
 
 - **Gate on changed lines only**: `--diff-base <ref>` (CLI) and `changed-lines-only` / `diff-base` (Action) report, annotate, write SARIF for, and fail on only the findings on lines a change adds or edits, relative to the merge base with `<ref>`. Turning the audit on in an existing codebase no longer floods the first pull request with findings nobody touched; the CLI counts the rest on stderr and the Action's JSON report still lists every finding. With changed-lines gating on, the Action's `finding-count` and `exit-code` outputs describe the gated findings.
 
