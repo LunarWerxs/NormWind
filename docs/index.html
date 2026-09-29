@@ -1065,23 +1065,49 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
      still reading what the product is: four of five simulated visitors on the
      ZergSwarm page called it an interruption (2026-09-26). Arriving once they
      have started reading makes it an offer instead. A page too short to scroll
-     keeps the old timer, or the badge could never appear. */
+     keeps the old timer, or the badge could never appear.
+
+     THE SHORT-PAGE TEST IS RE-RUN WHENEVER THE PAGE CHANGES SIZE (2026-09-29).
+     It used to run once, at 1.4s. An app still loading then (Watcharr's signed-in
+     demo at tablet width, tall while it drew its skeleton) settled into a page
+     that scrolls less than 400px, so neither rule could ever fire and the badge
+     never came. Now the test waits until the page has held still for half a
+     second (never before 1.4s), so a page that is short only while it loads
+     does not count; and reaching the bottom of a page counts as reading it. */
   var SCROLL_BEFORE_SHOWING = 400;
   var shown = false;
+  var t0 = Date.now(), settling = 0, ro = null;
+  function room() { return document.documentElement.scrollHeight - window.innerHeight; }
   function show() {
     if (shown) return;
     shown = true;
     window.removeEventListener('scroll', onScroll);
+    window.removeEventListener('resize', settle);
+    if (ro) ro.disconnect();
+    clearTimeout(settling);
     skin();
     el.hidden = false;
     // Next frame, so the transition has a start state to move from.
     requestAnimationFrame(function () { el.classList.add('lwdc-in'); });
   }
-  function onScroll() { if (window.scrollY >= SCROLL_BEFORE_SHOWING) show(); }
+  function onScroll() {
+    var y = window.scrollY;
+    if (y >= SCROLL_BEFORE_SHOWING || (y > 0 && y >= room() - 2)) show();
+  }
+  function settle() {
+    clearTimeout(settling);
+    settling = setTimeout(function () {
+      if (room() <= SCROLL_BEFORE_SHOWING) show();
+    }, Math.max(500, 1400 - (Date.now() - t0)));
+  }
   window.addEventListener('scroll', onScroll, { passive: true });
-  setTimeout(function () {
-    if (document.documentElement.scrollHeight <= window.innerHeight + SCROLL_BEFORE_SHOWING) show();
-  }, 1400);
+  window.addEventListener('resize', settle);
+  if (window.ResizeObserver) {
+    ro = new ResizeObserver(settle);
+    ro.observe(document.documentElement);
+    if (document.body) ro.observe(document.body);
+  }
+  settle();
 
   // Re-measure if the page's own theme flips underneath us.
   if (window.matchMedia) {
