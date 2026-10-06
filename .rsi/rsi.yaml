@@ -1,0 +1,20 @@
+schema: hydra-rsi/1
+# Size of the published npm package (the files listed in package.json "files") at HEAD, and the number of passing unit tests.
+# Package size is what every install downloads; the test count guards correctness while the code is shrunk or changed.
+metrics:
+  - id: package.shipped_bytes
+    kind: size
+    better: lower
+    unit: bytes
+    measure: "python scripts/rsi/shipped_bytes.py"
+    pick: 'shipped_bytes=(\d+)'
+    gate: exact
+    light: true
+  - id: tests.unit_passing
+    kind: count
+    better: higher
+    unit: tests
+    measure: "node --test --test-reporter=tap"
+    pick: '# pass (\d+)'
+    gate: exact
+    light: false
