@@ -1,0 +1,24 @@
+{
+ "closed": null,
+ "def_hash": "a031a112c115bde9",
+ "id": "20261006-package-shipped-bytes-f800",
+ "idea": "emit canonical-replacements.json as compact JSON (no indent) instead of 2-space pretty-print",
+ "lane": "normal",
+ "metric": "package.shipped_bytes",
+ "opened": {
+  "at": "2026-10-06T10:43:08+00:00",
+  "by": "blogi",
+  "commit": "bb8ceb7ff15cc18abe0f866ddfabd689e78084bd",
+  "machine": "MPC-HELL"
+ },
+ "pass_line": null,
+ "predict": {
+  "expect": 1000000.0,
+  "hi": 1300000.0,
+  "lo": 500000.0,
+  "p_keep": 0.8
+ },
+ "probe_minutes": null,
+ "project": "normwinds",
+ "schema": "hydra-rsi-trial/1"
+}
