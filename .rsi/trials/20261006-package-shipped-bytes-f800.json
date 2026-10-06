@@ -1,5 +1,95 @@
 {
- "closed": null,
+ "closed": {
+  "a": {
+   "commit": "bb8ceb7ff15cc18abe0f866ddfabd689e78084bd",
+   "def_hash": "a031a112c115bde9",
+   "dirty": false,
+   "id": "m-20261006T104312-0c1c18",
+   "load_after": 0.499,
+   "load_before": 0.406,
+   "machine": "MPC-HELL",
+   "metric": "package.shipped_bytes",
+   "project": "normwinds",
+   "reason": null,
+   "seconds": 0.818,
+   "settings": {
+    "gate": "exact",
+    "kind": "size",
+    "measure_files": {
+     "scripts/rsi/shipped_bytes.py": "54f3e64ce022e818b72b1cb565981af6287ea4b0"
+    }
+   },
+   "started": "2026-10-06T10:43:12+00:00",
+   "status": "ok",
+   "value": 2076005
+  },
+  "applies_if": "JSON\\.stringify\\([^)]*null, ?2\\)",
+  "at": "2026-10-06T10:46:59+00:00",
+  "b": {
+   "commit": "e033939808b654ef90e4a6cdd870b05ba07d4484",
+   "def_hash": "a031a112c115bde9",
+   "dirty": false,
+   "id": "m-20261006T104503-674d3a",
+   "load_after": 0.276,
+   "load_before": 0.315,
+   "machine": "MPC-HELL",
+   "metric": "package.shipped_bytes",
+   "project": "normwinds",
+   "reason": null,
+   "seconds": 0.922,
+   "settings": {
+    "gate": "exact",
+    "kind": "size",
+    "measure_files": {
+     "scripts/rsi/shipped_bytes.py": "54f3e64ce022e818b72b1cb565981af6287ea4b0"
+    }
+   },
+   "started": "2026-10-06T10:45:03+00:00",
+   "status": "ok",
+   "value": 1653046
+  },
+  "guards": [
+   {
+    "a": 0,
+    "b": 0,
+    "declared": false,
+    "metric": "arkitect_gating_errors",
+    "state": "ok"
+   },
+   {
+    "a": 252,
+    "b": 252,
+    "declared": false,
+    "metric": "arkitect_warnings",
+    "state": "ok"
+   },
+   {
+    "a": 151,
+    "b": 151,
+    "declared": false,
+    "metric": "arkitect_no_data",
+    "state": "ok"
+   },
+   {
+    "a": 5,
+    "b": 5,
+    "declared": false,
+    "metric": "deps_total",
+    "state": "ok"
+   },
+   {
+    "a": 79,
+    "b": 79,
+    "declared": true,
+    "metric": "tests.unit_passing",
+    "state": "ok"
+   }
+  ],
+  "method": "exact: 2076005 -> 1653046",
+  "note": "generated canonical snapshot JSON written compact instead of 2-space indented; same data",
+  "pattern": "generated JSON shipped in package: emit without indentation",
+  "verdict": "kept"
+ },
  "def_hash": "a031a112c115bde9",
  "id": "20261006-package-shipped-bytes-f800",
  "idea": "emit canonical-replacements.json as compact JSON (no indent) instead of 2-space pretty-print",
