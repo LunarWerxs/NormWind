@@ -1,0 +1,14 @@
+{
+  "docs": {
+    "home": "cloud",
+    "since": "2026-10-14",
+    "repo": "lunarwerxs/normwind",
+    "read": "docs tool: search, get",
+    "write": "docs tool: edit then put",
+    "keep": [
+      "docs/pricing.md",
+      "docs/reference/canonical-replacements.md"
+    ],
+    "site": true
+  }
+}
