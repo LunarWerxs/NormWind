@@ -1136,8 +1136,10 @@ addCheck("npm pack dry-run", async () => {
         ? await run(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", "npm pack --dry-run --json --silent"])
         : await run("npm", ["pack", "--dry-run", "--json", "--silent"]);
     assert(result.ok, `npm pack dry-run failed\n${result.stdout}\n${result.stderr}`);
-    const packs = JSON.parse(result.stdout);
-    const files = new Set((packs[0]?.files ?? []).map((f) => f.path));
+    // npm 10/11 print an array of pack results; npm 12 prints an object keyed by package name.
+    const packJson = JSON.parse(result.stdout);
+    const pack = Array.isArray(packJson) ? packJson[0] : Object.values(packJson)[0];
+    const files = new Set((pack?.files ?? []).map((f) => f.path));
     assert(files.has("bin/normwind.mjs"), "pack is missing bin/normwind.mjs");
     // Every lib/ module bin/normwind.mjs imports must ship, or the installed
     // CLI dies on its first import. The consumer-install check above proves
