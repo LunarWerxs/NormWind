@@ -141,6 +141,8 @@ def release_notes_from_readme(new_version: str) -> str:
             "Author the actual changes before releasing."
         )
 
+    tldr, detail = split_tldr(body, new_version)
+
     summary_html = match.group("summary").strip()
     summary_text = html.unescape(re.sub(r"<[^>]+>", "", summary_html)).strip()
     # The changelog separator after </strong> has varied over time (em-dash,
@@ -176,7 +178,55 @@ def release_notes_from_readme(new_version: str) -> str:
             f"(https://github.com/{GITHUB_REPO}/compare/{previous_tag}...v{new_version})"
         )
 
-    return f"{intro}\n\n{body}{comparison}"
+    if tldr is None:
+        return f"{intro}\n\n{detail}{comparison}"
+    return (
+        f"{intro}\n\n## TL;DR\n\n{tldr}\n\n"
+        f"<details><summary><b>Read more: everything in {new_version}</b></summary>\n\n"
+        f"{detail}\n\n</details>{comparison}"
+    )
+
+
+# A changelog entry with more than this many bullets must open with its own TL;DR: a reader
+# should learn what changed without reading every line. Shorter entries show whole.
+TLDR_REQUIRED_ABOVE_BULLETS = 2
+
+
+def split_tldr(body: str, new_version: str) -> tuple[str | None, str]:
+    """Split a changelog entry into its TL;DR bullets and the full detail.
+
+    An entry opens with a `**TL;DR**` line and its headline bullets, then
+    `**Everything in X.Y.Z**` before the full list. The release page shows the
+    TL;DR and folds the full list. An entry with no TL;DR is returned whole as
+    the detail, and is refused if it is long.
+    """
+    tldr_line = re.search(r"(?m)^\*\*TL;DR\*\*[ \t]*$", body)
+    if tldr_line is None:
+        bullets = len(re.findall(r"(?m)^-\s+\S", body))
+        if bullets > TLDR_REQUIRED_ABOVE_BULLETS:
+            sys.exit(
+                f"README.md's v{new_version} changelog entry has {bullets} bullets and no TL;DR. "
+                f"Open it with a **TL;DR** line and its headline bullets, then "
+                f"**Everything in {new_version}** before the full list."
+            )
+        return None, body
+
+    rest = body[tldr_line.end():]
+    everything_line = re.search(
+        rf"(?m)^\*\*Everything in {re.escape(new_version)}\*\*[ \t]*$", rest
+    )
+    if everything_line is None:
+        sys.exit(
+            f"README.md's v{new_version} changelog entry has a TL;DR but no "
+            f"**Everything in {new_version}** line before its full list."
+        )
+    tldr = rest[: everything_line.start()].strip()
+    detail = rest[everything_line.end():].strip()
+    if not re.search(r"(?m)^-\s+\S", tldr):
+        sys.exit(f"README.md's v{new_version} changelog TL;DR has no bullets.")
+    if not re.search(r"(?m)^-\s+\S", detail):
+        sys.exit(f"README.md's v{new_version} changelog has nothing after its TL;DR.")
+    return tldr, detail
 
 
 def run(cmd: list[str], cwd: Path | None = None, env_extra: dict | None = None, display: str | None = None) -> str:

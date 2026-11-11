@@ -32,21 +32,16 @@
  *   2 -> harness failure (bad corpus, CLI error, unparseable output)
  */
 
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 
-const execFileAsync = promisify(execFile);
+import { REPO_ROOT, runNormwind } from "./cli-harness.mjs";
 
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const NORMWIND_BIN = path.join(REPO_ROOT, "bin", "normwind.mjs");
 const CORPUS_PATH = path.join(REPO_ROOT, "test", "precision", "corpus.json");
-const NODE_BIN = process.execPath;
 const LABELS = new Set(["rewrite", "keep"]);
 
 // Floors match the ones the upstream idea ships with. Rewrites are held to the
@@ -136,22 +131,6 @@ async function writeCases(cases) {
         await fs.writeFile(path.join(dir, caseFileName(entry)), caseMarkup(entry), "utf8");
     }
     return dir;
-}
-
-async function runNormwind(args, cwd) {
-    try {
-        const { stdout, stderr } = await execFileAsync(NODE_BIN, [NORMWIND_BIN, ...args], {
-            cwd,
-            env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
-            maxBuffer: 32 * 1024 * 1024,
-        });
-        return { exitCode: 0, stdout, stderr };
-    } catch (err) {
-        if (typeof err.code === "number") {
-            return { exitCode: err.code, stdout: err.stdout ?? "", stderr: err.stderr ?? "" };
-        }
-        throw err;
-    }
 }
 
 function parseCliJson(stdout, label) {

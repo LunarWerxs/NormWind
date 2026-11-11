@@ -32,25 +32,14 @@
  *   2 -> harness itself failed (missing input, runtime error, etc.)
  */
 
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { promisify } from "node:util";
 
+import { FIXTURES_ROOT, findFixtureInput, fixtureJobs, listFixtures, mapPool, runNormwind } from "./cli-harness.mjs";
 import { renderSquiggleGolden } from "./squiggle-golden.mjs";
-
-const execFileAsync = promisify(execFile);
-
-const REPO_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, "$1"), "..");
-const NORMWIND_BIN = path.join(REPO_ROOT, "bin", "normwind.mjs");
-const FIXTURES_ROOT = path.join(REPO_ROOT, "test", "fixtures");
-const NODE_BIN = process.execPath;
-
-const FIXTURE_INPUT_PREFIX = "input.";
-const ALLOWED_EXTENSIONS = new Set([".vue", ".tsx", ".ts", ".jsx", ".js", ".mjs"]);
 
 function parseArgs(argv) {
     const flags = { update: false, json: false, filter: null };
@@ -64,26 +53,6 @@ function parseArgs(argv) {
         }
     }
     return flags;
-}
-
-async function listFixtures(filter) {
-    const entries = await fs.readdir(FIXTURES_ROOT, { withFileTypes: true });
-    const dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
-    const filtered = filter ? dirs.filter((d) => d.includes(filter)) : dirs;
-    return filtered.sort();
-}
-
-async function findInputFile(fixtureDir) {
-    const entries = await fs.readdir(fixtureDir);
-    for (const name of entries) {
-        if (name.startsWith(FIXTURE_INPUT_PREFIX)) {
-            const ext = path.extname(name);
-            if (ALLOWED_EXTENSIONS.has(ext)) {
-                return { name, ext };
-            }
-        }
-    }
-    return null;
 }
 
 async function copyFixtureToTmp(fixtureDir, inputName) {
@@ -110,23 +79,6 @@ async function cleanStaleActualFiles(fixtureDir) {
         if (name.startsWith("actual.")) {
             await fs.rm(path.join(fixtureDir, name), { force: true });
         }
-    }
-}
-
-async function runNormwind(args, cwd) {
-    try {
-        const { stdout, stderr } = await execFileAsync(NODE_BIN, [NORMWIND_BIN, ...args], {
-            cwd,
-            env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
-            maxBuffer: 32 * 1024 * 1024,
-        });
-        return { exitCode: 0, stdout, stderr };
-    } catch (err) {
-        // execFile rejects on non-zero exit, but we still want stdout (findings).
-        if (typeof err.code === "number") {
-            return { exitCode: err.code, stdout: err.stdout ?? "", stderr: err.stderr ?? "" };
-        }
-        throw err;
     }
 }
 
@@ -261,7 +213,7 @@ function checkExitCodeInvariant(label, exitCode, findingCount) {
 }
 
 async function runAudit(fixtureDir, fixture, options) {
-    const input = await findInputFile(fixtureDir);
+    const input = await findFixtureInput(fixtureDir);
     if (!input) {
         return { ok: false, label: "audit", error: "no input.* file in fixture" };
     }
@@ -304,7 +256,7 @@ async function runAudit(fixtureDir, fixture, options) {
 }
 
 async function runFixVariant(fixtureDir, fixture, fixFlag, expectedSuffix, options) {
-    const input = await findInputFile(fixtureDir);
+    const input = await findFixtureInput(fixtureDir);
     if (!input) {
         return { ok: false, label: fixFlag, error: "no input.* file in fixture" };
     }
@@ -437,7 +389,7 @@ async function runFixture(fixture, options) {
     const fixtureDir = path.join(FIXTURES_ROOT, fixture);
     await cleanStaleActualFiles(fixtureDir);
 
-    const input = await findInputFile(fixtureDir);
+    const input = await findFixtureInput(fixtureDir);
     if (!input) {
         return { fixture, results: [{ ok: false, label: "setup", error: "no input.* file" }] };
     }
@@ -468,11 +420,8 @@ async function main() {
         return;
     }
 
-    const summary = [];
-    for (const fixture of fixtures) {
-        const result = await runFixture(fixture, flags);
-        summary.push(result);
-    }
+    // Fixtures share nothing (each CLI run copies its input into its own temp folder), so several run at once.
+    const summary = await mapPool(fixtures, fixtureJobs(), (fixture) => runFixture(fixture, flags));
 
     let failed = 0;
     if (flags.json) {

@@ -611,6 +611,16 @@ As of `eslint-plugin-tailwindcss` 4.x, that group table lives in NormWind's own 
 
 <br/>
 
+**TL;DR**
+
+- **Your theme drives the fixes**: pass `--theme-css` and NormWind canonicalizes against your project's own `@theme`. With `--radius-lg: 10px`, `rounded-[10px]` becomes `rounded-lg`.
+- **Mistakes now stop the run**: a pattern that matches nothing, `--fix` with `--diff-base`, a switch given a value (`--fix=false`), and a project on Tailwind older than v4 now exit `2` instead of passing quietly or guessing. Check your CI scripts if they relied on the old behavior.
+- **File matching does what you typed**: paths with brackets such as `app/[slug]/page.tsx` work, and brace patterns may contain wildcards.
+- **Fixes keep your file intact**: a fix keeps the class list's line breaks and indentation, skips files that are not UTF-8, and now fixes lone arbitrary classes in JSX/TSX instead of only reporting them.
+- **No cap on big codebases**: the CLI canonicalizes any number of classes with flat memory, and a disk cache made a warm audit of 1,500 files about ten times faster.
+
+**Everything in 4.1.0**
+
 **Fixes**
 
 - **Theme-aware canonicalization (`--theme-css`)**: with `--theme-css`, the project's own `@theme` drives canonicalization as well as merge safety. With `--radius-lg: 10px` in the theme, `rounded-[10px]` becomes `rounded-lg` and `rounded-[8px]` is left alone. The shipped snapshot is skipped for that run. Without `--theme-css`, a project that redefines theme scales can still get suggestions that assume Tailwind's default scale.

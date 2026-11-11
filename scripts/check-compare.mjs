@@ -14,21 +14,13 @@
  * corpus, or the snapshot lookup path has a bug.
  */
 
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { promisify } from "node:util";
 
-const execFileAsync = promisify(execFile);
-
-const REPO_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, "$1"), "..");
-const NORMWIND_BIN = path.join(REPO_ROOT, "bin", "normwind.mjs");
-const FIXTURES_ROOT = path.join(REPO_ROOT, "test", "fixtures");
-const NODE_BIN = process.execPath;
-const ALLOWED_EXTENSIONS = new Set([".vue", ".tsx", ".ts", ".jsx", ".js", ".mjs"]);
+import { FIXTURES_ROOT, findFixtureInput, fixtureJobs, listFixtures, mapPool, runNormwind } from "./cli-harness.mjs";
 
 function parseArgs(argv) {
     const flags = { filter: null, json: false };
@@ -42,22 +34,6 @@ function parseArgs(argv) {
     return flags;
 }
 
-async function listFixtures(filter) {
-    const entries = await fs.readdir(FIXTURES_ROOT, { withFileTypes: true });
-    const dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
-    return (filter ? dirs.filter((d) => d.includes(filter)) : dirs).sort();
-}
-
-async function findInputFile(fixtureDir) {
-    const entries = await fs.readdir(fixtureDir);
-    for (const name of entries) {
-        if (name.startsWith("input.") && ALLOWED_EXTENSIONS.has(path.extname(name))) {
-            return name;
-        }
-    }
-    return null;
-}
-
 async function makeRunDir(fixtureDir, inputName) {
     const dir = path.join(os.tmpdir(), `normwind-compare-${randomUUID()}`);
     await fs.mkdir(dir, { recursive: true });
@@ -67,22 +43,6 @@ async function makeRunDir(fixtureDir, inputName) {
 
 async function rmrf(dir) {
     await fs.rm(dir, { recursive: true, force: true });
-}
-
-async function runNormwind(cwd, extraEnv = {}) {
-    try {
-        const { stdout, stderr } = await execFileAsync(NODE_BIN, [NORMWIND_BIN, "--json"], {
-            cwd,
-            env: { ...process.env, ...extraEnv, NO_COLOR: "1", FORCE_COLOR: "0" },
-            maxBuffer: 32 * 1024 * 1024,
-        });
-        return { exitCode: 0, stdout, stderr };
-    } catch (err) {
-        if (typeof err.code === "number") {
-            return { exitCode: err.code, stdout: err.stdout ?? "", stderr: err.stderr ?? "" };
-        }
-        throw err;
-    }
 }
 
 function parseJson(stdout) {
@@ -106,18 +66,19 @@ function normalize(payload) {
 
 async function compareFixture(fixture) {
     const fixtureDir = path.join(FIXTURES_ROOT, fixture);
-    const inputName = await findInputFile(fixtureDir);
-    if (!inputName) {
+    const input = await findFixtureInput(fixtureDir);
+    if (!input) {
         return { fixture, ok: false, error: "missing input.* fixture" };
     }
+    const inputName = input.name;
 
     const liveDir = await makeRunDir(fixtureDir, inputName);
     const snapshotDir = await makeRunDir(fixtureDir, inputName);
 
     try {
         const [liveRun, snapshotRun] = await Promise.all([
-            runNormwind(liveDir, { NORMWIND_DISABLE_CANONICAL_SNAPSHOT: "1" }),
-            runNormwind(snapshotDir),
+            runNormwind(["--json"], liveDir, { NORMWIND_DISABLE_CANONICAL_SNAPSHOT: "1" }),
+            runNormwind(["--json"], snapshotDir),
         ]);
         const livePayload = parseJson(liveRun.stdout);
         const snapshotPayload = parseJson(snapshotRun.stdout);
@@ -143,11 +104,8 @@ async function compareFixture(fixture) {
 async function main() {
     const flags = parseArgs(process.argv.slice(2));
     const fixtures = await listFixtures(flags.filter);
-    const results = [];
-
-    for (const fixture of fixtures) {
-        results.push(await compareFixture(fixture));
-    }
+    // Each fixture runs the CLI twice at once (live and snapshot), so half as many fixtures run together.
+    const results = await mapPool(fixtures, Math.ceil(fixtureJobs() / 2), compareFixture);
 
     const failures = results.filter((r) => !r.ok);
     if (flags.json) {
