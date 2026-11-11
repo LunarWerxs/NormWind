@@ -848,8 +848,8 @@ def main() -> None:
             f"PAT (Contents: read/write on {GITHUB_REPO}) to {ENV_FILE}."
         )
     # npm credentials are only needed on this machine for --publish-locally;
-    # the normal path publishes from GitHub Actions using the NPM_TOKEN
-    # repository secret. The pre-flight `npm publish --dry-run` never
+    # the normal path publishes from GitHub Actions through npm trusted
+    # publishing (OIDC), which needs no stored token. The pre-flight `npm publish --dry-run` never
     # contacts the registry with the token, so a placeholder is fine there.
     if args.publish_locally and not npm_token:
         sys.exit(
