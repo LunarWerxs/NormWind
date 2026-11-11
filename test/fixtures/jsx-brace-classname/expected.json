@@ -24,7 +24,7 @@
     {
       "filePath": "input.tsx",
       "line": 6,
-      "column": 48,
+      "column": 49,
       "message": "Classnames 'mt-1, mb-1' could be replaced by the 'my-1' shorthand!"
     }
   ]

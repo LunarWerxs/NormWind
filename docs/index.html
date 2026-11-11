@@ -690,7 +690,7 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
         <ul>
           <li>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="m5 12 5 5 9-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            <span><b>Shorthand groups</b> come from <code class="cls">eslint-plugin-tailwindcss</code>'s utility-group definitions.</span>
+            <span><b>Shorthand groups</b> come from a vendored copy of <code class="cls">eslint-plugin-tailwindcss</code>'s utility-group definitions. That package is not a dependency.</span>
           </li>
           <li>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="m5 12 5 5 9-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -799,7 +799,7 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
           </li>
           <li>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="m5 12 5 5 9-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            <span><b>Bounded</b>: a single run refuses to push more than 1,000 unique cache misses through the live canonicalizer, so scanning untrusted code cannot balloon into an out-of-memory crash.</span>
+            <span><b>Bounded</b>: the CLI has no cap on live canonicalization and restarts its Tailwind engine every 1,000 canonicalizations to keep memory flat. The GitHub Action refuses to go past 10,000 unique live canonicalizations per run, so scanning untrusted code cannot balloon into an out-of-memory crash.</span>
           </li>
         </ul>
       </div>
@@ -828,7 +828,7 @@ a.lw-parent:hover .lw-tip,a.lw-parent:focus-visible .lw-tip{opacity:1;visibility
     <span class="tok-key">runs-on</span><span class="tok-punc">:</span> ubuntu-latest
     <span class="tok-key">steps</span><span class="tok-punc">:</span>
       <span class="tok-punc">-</span> <span class="tok-key">uses</span><span class="tok-punc">:</span> actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 <span class="tok-com"># v7</span>
-      <span class="tok-punc">-</span> <span class="tok-key">uses</span><span class="tok-punc">:</span> LunarWerxs/NormWind@v3</code></pre>
+      <span class="tok-punc">-</span> <span class="tok-key">uses</span><span class="tok-punc">:</span> LunarWerxs/NormWind@v4</code></pre>
       </div>
     </div>
   </section>

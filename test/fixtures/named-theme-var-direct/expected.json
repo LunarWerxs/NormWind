@@ -37,12 +37,6 @@
       "filePath": "input.vue",
       "line": 5,
       "column": 20,
-      "message": "Classnames 'px-2, py-2' could be replaced by the 'p-2' shorthand!"
-    },
-    {
-      "filePath": "input.vue",
-      "line": 5,
-      "column": 20,
       "message": "The class 'rounded-[var(--radius-sm)]' can be written as 'rounded-sm'"
     },
     {
@@ -50,6 +44,12 @@
       "line": 5,
       "column": 47,
       "message": "The class 'data-[state=open]:text-(--color-ink-1000)' can be written as 'data-[state=open]:text-ink-1000'"
+    },
+    {
+      "filePath": "input.vue",
+      "line": 5,
+      "column": 89,
+      "message": "Classnames 'px-2, py-2' could be replaced by the 'p-2' shorthand!"
     },
     {
       "filePath": "input.vue",

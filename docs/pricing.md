@@ -8,9 +8,9 @@ required.
 - Price: $0
 - License: MIT, https://github.com/LunarWerxs/NormWind/blob/main/LICENSE
 - Requires: Node.js `^22.18.0` or `>=24.11.0`
-- Limits: none imposed by NormWind itself. The GitHub Action caps a single run at 1,000
-  unique cache misses through the live canonicalizer, a safety bound against
-  out-of-memory crashes on huge or untrusted diffs, not a pricing limit.
+- Limits: none imposed by NormWind itself. The CLI has no cap on live canonicalization. The
+  GitHub Action caps a single run at 10,000 unique live canonicalizations, a safety bound
+  against out-of-memory crashes on huge or untrusted diffs, not a pricing limit.
 - Features included: the full CLI (audit, `--fix`, `--fixall`, `--dry-run`, `--json`,
   `--reporter sarif`), the first-party GitHub Action with inline PR annotations, and CI
   enforcement via exit codes. Nothing is held back for a paid version, because there isn't

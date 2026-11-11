@@ -1,0 +1,25 @@
+{
+  "ruleId": "tailwindcss/enforces-shorthand",
+  "lintedFiles": 1,
+  "findingCount": 3,
+  "findings": [
+    {
+      "filePath": "input.tsx",
+      "line": 4,
+      "column": 40,
+      "message": "The class 'w-[16px]' can be written as 'w-4'"
+    },
+    {
+      "filePath": "input.tsx",
+      "line": 5,
+      "column": 45,
+      "message": "The class 'w-[16px]' can be written as 'w-4'"
+    },
+    {
+      "filePath": "input.tsx",
+      "line": 6,
+      "column": 40,
+      "message": "The class 'rounded-[24px]' can be written as 'rounded-3xl'"
+    }
+  ]
+}

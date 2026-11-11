@@ -42,9 +42,10 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22.x
-          cache: npm
           registry-url: https://registry.npmjs.org
-      - run: npm ci
+      # No install here: publishing needs only the checked-out files (no
+      # prepack/prepublish script), and an install would run third-party
+      # lifecycle code in the one job that holds id-token: write.
       - name: Verify tag matches package.json version
         run: |
           PKG_V=$(node -p "require('./package.json').version")

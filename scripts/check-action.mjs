@@ -28,12 +28,14 @@ function assert(condition, message) {
 
 async function run(command, args, options = {}) {
     try {
+        // options first, env last: spreading options after the merged env
+        // used to replace it with options.env alone.
         const result = await execFileAsync(command, args, {
             cwd: REPO_ROOT,
-            env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1", ...(options.env ?? {}) },
             maxBuffer: 64 * 1024 * 1024,
             windowsHide: true,
             ...options,
+            env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1", ...(options.env ?? {}) },
         });
         return { exitCode: 0, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
     } catch (error) {
@@ -157,7 +159,6 @@ addCheck("scanner child environment strips GitHub tokens and arbitrary secrets",
         assert(!Object.hasOwn(environment, "GITHUB_TOKEN"), "scanner inherited GITHUB_TOKEN");
         assert(!Object.hasOwn(environment, "TEST_NORMWIND_SECRET"), "scanner inherited an arbitrary secret");
         assert(environment.NORMWIND_FORCE_BUNDLED_RUNTIME === "1", "scanner must force bundled dependencies");
-        assert(environment.NORMWIND_DISABLE_RIPGREP === "1", "scanner must not execute a checkout-provided rg binary");
         assert(environment.NORMWIND_DISABLE_DISK_CACHE === "1", "scanner must not write its cache into the checkout");
     } finally {
         if (previousToken === undefined) delete process.env.GITHUB_TOKEN;
@@ -371,6 +372,48 @@ addCheck("invalid inputs and workspace escapes fail closed", async () => {
     }
 });
 
+addCheck("sarif paths are repository-relative under a working-directory", async () => {
+    // Code scanning resolves a SARIF uri from the repository root. The CLI
+    // reports paths relative to working-directory, so the Action must rebase
+    // them, and it must use the same SARIF builder as the CLI.
+    const runResult = await runAction({
+        files: { "packages/web/src/A.vue": FINDING_SOURCE },
+        inputs: {
+            "WORKING-DIRECTORY": "packages/web",
+            "FAIL-ON-FINDINGS": "false",
+            "SARIF-FILE": "normwind.sarif",
+        },
+    });
+    try {
+        assert(runResult.exitCode === 0, `${runResult.stdout}\n${runResult.stderr}`);
+        const sarif = JSON.parse(await fs.readFile(runResult.outputs["sarif-path"], "utf8"));
+        const uri = sarif.runs[0].results[0]?.locations[0].physicalLocation.artifactLocation.uri;
+        assert(uri === "packages/web/src/A.vue", `SARIF uri must be repository-relative, got ${uri}`);
+        assert(sarif.runs[0].tool.driver.rules[0].helpUri, "Action SARIF must come from the shared builder (lib/sarif.mjs)");
+        assert(sarif.runs[0].invocations?.[0]?.properties?.lintedFiles === 1, "Action SARIF is missing invocations");
+    } finally {
+        await runResult.cleanup();
+    }
+});
+
+addCheck("allow-empty input lets a pattern match nothing", async () => {
+    const strict = await runAction({ files: { "src/A.vue": CLEAN_SOURCE }, inputs: { PATTERNS: "src/**/*.svelte" } });
+    try {
+        assert(strict.exitCode === 1 && strict.outputs.result === "error", `an empty match must fail without allow-empty: ${strict.stdout}`);
+    } finally {
+        await strict.cleanup();
+    }
+    const allowed = await runAction({
+        files: { "src/A.vue": CLEAN_SOURCE },
+        inputs: { PATTERNS: "src/**/*.svelte", "ALLOW-EMPTY": "true" },
+    });
+    try {
+        assert(allowed.exitCode === 0 && allowed.outputs.result === "clean", `allow-empty must pass an empty match: ${allowed.stdout}\n${allowed.stderr}`);
+    } finally {
+        await allowed.cleanup();
+    }
+});
+
 addCheck("sarif-file and ignore inputs", async () => {
     const runResult = await runAction({
         files: {
@@ -484,7 +527,6 @@ async function runScannerInWorkspace(args, { workspace, cwd = workspace }) {
         env: {
             NORMWIND_ACTION_WORKSPACE: workspace,
             NORMWIND_DISABLE_DISK_CACHE: "1",
-            NORMWIND_DISABLE_RIPGREP: "1",
             NORMWIND_FORCE_BUNDLED_RUNTIME: "1",
             NORMWIND_BUNDLED_TAILWIND_CSS: path.join(REPO_ROOT, "dist", "tailwindcss-index.css"),
         },
@@ -580,7 +622,7 @@ addCheck("Action mode ignores a checkout-supplied ignore file", async () => {
         // Outside Action mode the same file IS honored.
         const local = await run(process.execPath, [CLI_ENTRY, "--json"], {
             cwd: workspace,
-            env: { NORMWIND_DISABLE_DISK_CACHE: "1", NORMWIND_DISABLE_RIPGREP: "1" },
+            env: { NORMWIND_DISABLE_DISK_CACHE: "1" },
         });
         const localPayload = JSON.parse(local.stdout.slice(local.stdout.indexOf("{")));
         assert(localPayload.findingCount === 0, `.normwindignore was not honored locally: ${local.stdout}`);

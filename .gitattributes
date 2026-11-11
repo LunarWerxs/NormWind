@@ -20,7 +20,7 @@ docs/reference/canonical-replacements.md text eol=lf
 #
 # This is proven, not theoretical. It happened on 3fe92ad, where a rebase
 # conflict in dist/normwind.mjs was resolved in favour of the upstream copy.
-# The commit went red on all seven CI legs. Note also that the bundle can
+# The commit went red on every CI leg (five in the current matrix). Note also that the bundle can
 # change even when the source edit looks like it could not possibly affect it:
 # that commit only removed an already-unused helper, but it was the second user
 # of a name, and the minifier stopped emitting that name once one user was
@@ -41,7 +41,7 @@ docs/reference/canonical-replacements.md text eol=lf
 # both sides changed dist/; when one side did, git still resolves normally.
 dist/** text eol=lf -merge
 
-# The regression suite (scripts/test-regression.mjs) does a plain string
+# The regression suite (scripts/check-regression.mjs) does a plain string
 # comparison of fixture input/output against the committed expected.* files.
 # On machines with core.autocrlf=true, a fresh checkout would materialize
 # input.* with CRLF while expected.fixed.*/expected.fixall.* stay LF (or vice

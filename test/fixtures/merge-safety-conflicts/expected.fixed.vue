@@ -1,6 +1,9 @@
 <template>
     <!-- A broader utility at a DIFFERENT value: merging would let it win. -->
     <div class="mx-8 ml-2 mr-2">axis conflict</div>
+    <!-- A conflicting sibling the default theme does not know (a project-only
+         --spacing-gutter): the check cannot see what it sets, so it fails closed. -->
+    <div class="mx-gutter ml-2 mr-2">project-only sibling</div>
     <div class="size-8 w-4 h-4">size conflict</div>
     <div class="w-4 w-6 h-6">duplicate width</div>
     <div class="border-8 border-y-4 border-x-4">four sides vs all</div>

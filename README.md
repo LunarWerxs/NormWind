@@ -138,11 +138,27 @@ It also catches arbitrary values that Tailwind's own design system can express a
 
 NormWind doesn't invent mappings:
 
-- **Shorthand merges** come from [`eslint-plugin-tailwindcss`](https://github.com/francoismassart/eslint-plugin-tailwindcss)'s Tailwind utility-group definitions, and, when the engine supports it, from Tailwind itself: `designSystem.canonicalizeCandidates(classes, { collapse: true })` replaces a set with one utility only when the compiled CSS of the replacement matches the set's. Tailwind's collapse only adds merges the group table misses (such as `text-sm leading-6` -> `text-sm/6`); it never replaces or drops a merge the table finds (set `NORMWIND_DISABLE_ENGINE_COLLAPSE=1` to use the table alone).
+- **Shorthand merges** come from a vendored copy of [`eslint-plugin-tailwindcss`](https://github.com/francoismassart/eslint-plugin-tailwindcss) v3.18.3's Tailwind utility-group definitions (`lib/vendor/tailwind-classname-groups.mjs`). `eslint-plugin-tailwindcss` is no longer a dependency of NormWind, so it is not installed with it. When the engine supports it, from Tailwind itself: `designSystem.canonicalizeCandidates(classes, { collapse: true })` replaces a set with one utility only when the compiled CSS of the replacement matches the set's. Tailwind's collapse only adds merges the group table misses (such as `text-sm leading-6` -> `text-sm/6`); it never replaces or drops a merge the table finds (set `NORMWIND_DISABLE_ENGINE_COLLAPSE=1` to use the table alone).
 - **Canonical values** come from Tailwind's own `designSystem.canonicalizeCandidates` engine.
 - **A merge is only applied when it cannot change the rendered CSS.** Tailwind emits utilities in its own order (broad before narrow, and same-utility candidates sorted by value), not in authoring order. Collapsing `ml-2 mr-2` into `mx-2` when the same class list already has `mx-8` would hand the win to `mx-8` and silently change the margin. So whenever another utility in the same group targets the same property at a different value, NormWind resolves the before and after class lists through Tailwind's own engine and compares the resulting declarations; if they differ at all, the merge is skipped. Skipping costs a suggestion; applying would cost a silent visual regression.
 
 This is deliberately conservative: an unusual class list can keep a merge NormWind could not prove safe, and that's the correct outcome.
+
+### 🎨 Theme scales
+
+Canonicalization and merge-safety are judged against Tailwind's **default** theme unless you pass `--theme-css <file>`. The file is your entry CSS with the `@theme` block.
+
+- **With `--theme-css`**, your own theme drives canonicalization too. With `--radius-lg: 10px` in the theme, `rounded-[10px]` becomes `rounded-lg`, and `rounded-[8px]` is left alone. The shipped snapshot is skipped for that run, and answers come from the live Tailwind engine.
+- **Without `--theme-css`**, a project that redefines theme scales can get suggestions that assume the default scale. Pass `--theme-css` when your theme changes the scales.
+
+An `@import` in the theme CSS that NormWind cannot follow (a bare package-style name, or `@import url(...)`) is not read. NormWind prints a one-time warning that names it, so you know that part of your theme is missing from the run.
+
+NormWind only audits and rewrites Tailwind CSS v4. If the scanned project's own installed `tailwindcss` is not v4, NormWind exits `2` with a one-line message and does not audit or rewrite it.
+
+### ⚠️ Limits
+
+- **Physical pairs and writing modes.** Physical pairs merged into logical utilities (`ml-2 mr-2` -> `mx-2`, `pl`/`pr` -> `px`) are identical in horizontal writing modes. In vertical writing modes (`writing-mode: vertical-*`), the inline axis is vertical, so the two forms can differ. Check those elements by hand.
+- **Merge safety is per string literal.** Sibling strings inside one `cn()` or `clsx()` call are not compared with each other. A conflict split across two strings is not caught unless you use `twMerge`.
 
 ## 🎛️ CLI reference
 
@@ -153,27 +169,30 @@ This is deliberately conservative: an unusual class list can keep a merge NormWi
 | `normwind --json`                                        | Print machine-readable audit output (alias for `--reporter json`). |
 | `normwind --ignore <glob>`                               | Skip paths matching a glob. Repeatable. |
 | `normwind --allow-empty`                                 | Exit `0` instead of `2` when the given pattern(s) match no lintable files. |
-| `normwind --diff-base <ref>`                             | Report, and exit `1` for, only findings on lines changed since the merge base of `<ref>` (e.g. `origin/main`), plus untracked files. Findings on other lines are counted on stderr, so an existing codebase can adopt the audit at full strictness. |
+| `normwind --diff-base <ref>`                             | Report, and exit `1` for, only findings on lines changed since the merge base of `<ref>` (e.g. `origin/main`), plus untracked files. Findings on other lines are counted on stderr, so an existing codebase can adopt the audit at full strictness. Cannot be combined with `--fix` or `--fixall` (exit `2`). |
 | `normwind --baseline <file>`                             | Adopt NormWind on a codebase that already has findings: only findings beyond each file's recorded count fail. See [Adopting on an existing codebase](#adopting-on-an-existing-codebase). |
 | `normwind --baseline <file> --update-baseline`           | Write the current per-file counts to the baseline. Creates it once; afterwards it only lowers or removes counts. |
 | `normwind --fix`                                         | Apply safe fixes across every markup format (Vue, Svelte, Astro, HTML), then re-run the audit. |
 | `normwind --fixall`                                      | Apply broader fixes across every supported source type, including JS, MJS, CJS, TS, JSX, TSX, MTS, and CTS, then re-run the audit. |
 | `normwind --fix --dry-run` / `normwind --fixall --dry-run` | Show which files *would* be rewritten without writing anything to disk. |
-| `normwind --extract-canonical`                           | Extract canonical replacements in memory and print a summary. |
-| `normwind --extract-canonical --write-canonical-files`   | Write `docs/reference/canonical-replacements.{json,md}`. |
-| `normwind --check-canonical`                             | Fail if the generated canonical files are missing or stale. |
-| `normwind --cleanup-canonical-files`                     | Remove generated canonical files from `docs/reference`. |
+| `normwind --extract-canonical`                           | *(maintainers)* Extract canonical replacements in memory and print a summary. Runs only inside a NormWind checkout; exits `2` elsewhere. |
+| `normwind --extract-canonical --write-canonical-files`   | *(maintainers)* Write `docs/reference/canonical-replacements.{json,md}`. Same checkout-only rule. |
+| `normwind --check-canonical`                             | *(maintainers)* Fail if the generated canonical files are missing or stale. Same checkout-only rule. |
+| `normwind --cleanup-canonical-files`                     | *(maintainers)* Remove generated canonical files from `docs/reference`. Same checkout-only rule. |
 | `normwind --suggest-named-theme-vars --theme-css <path>` | *(opt-in)* Suggest replacing `utility-(--md-sys-color-x)` with your project's named theme class. Off by default. |
+| `normwind --theme-css <path>`                            | Judge every rewrite and merge-safety check by the project's own `@theme` block instead of Tailwind's default theme. See [Theme scales](#theme-scales). |
 | `normwind -- <path>`                                     | End flag parsing, so a target that starts with a dash is treated as a pattern, not a flag. |
 | `normwind -h, --help`                                    | Print usage and exit `0`. |
 | `normwind -v, --version`                                 | Print the installed normwind version and exit `0`. |
+
+A switch flag (one that takes no value, such as `--fix`) given one (`--fix=false`) is refused with exit `2`. Before this, `--fix=false` turned fixing on.
 
 ## 🧾 Output
 
 Text output groups findings by file, readable at a glance:
 
 ```text
-normwinds v3.5.0: 2 finding(s) across 1 linted file(s).
+normwinds v4.0.0: 2 finding(s) across 1 linted file(s).
 
 src/components/Card.vue
     42:14 Classnames 'px-4, py-4' could be replaced by the 'p-4' shorthand!
@@ -184,7 +203,7 @@ JSON output is stable and CI-friendly:
 
 ```json
 {
-  "version": "3.5.0",
+  "version": "4.0.0",
   "ruleId": "tailwindcss/enforces-shorthand",
   "lintedFiles": 1,
   "findingCount": 1,
@@ -205,7 +224,7 @@ JSON output is stable and CI-friendly:
 | ---- | ------- |
 | `0`  | No findings, or a requested maintenance command completed successfully. |
 | `1`  | Audit findings exist, or canonical drift was detected. With `--baseline`: a file has more findings than its recorded count, a count dropped and the baseline was not lowered, or `--update-baseline` refused to raise a count. |
-| `2`  | Usage or runtime error (unknown flag, invalid `--reporter` value, missing `--theme-css` value, unreadable `--theme-css` path, missing or malformed `--baseline` file, etc.); a pattern matched no lintable files (pass `--allow-empty` for `0` instead); `--fix`/`--fixall`/`--dry-run` was combined with `--check-canonical`, `--extract-canonical`, or `--cleanup-canonical-files`; `--dry-run` was passed without `--fix`/`--fixall`; `--diff-base` could not be read (not a git checkout, unknown ref) or was combined with a canonical-maintenance flag; **or** `--fix`/`--fixall` finished with one or more files skipped/failed (see the fix summary printed to stderr). |
+| `2`  | Usage or runtime error (unknown flag, invalid `--reporter` value, missing `--theme-css` value, unreadable `--theme-css` path, missing or malformed `--baseline` file, a switch flag given a value such as `--fix=false`, etc.); a pattern matched no lintable files (the message names any file that was refused, as ignored or as an unsupported type; pass `--allow-empty` for `0` instead); `--fix`/`--fixall`/`--dry-run` was combined with `--check-canonical`, `--extract-canonical`, or `--cleanup-canonical-files`; `--dry-run` was passed without `--fix`/`--fixall`; `--fix`/`--fixall` was combined with `--diff-base`; a canonical-maintenance flag was run outside a NormWind checkout; the project's installed `tailwindcss` is not v4; `--diff-base` could not be read (not a git checkout, unknown ref) or was combined with a canonical-maintenance flag; **or** `--fix`/`--fixall` finished with one or more files skipped/failed (see the fix summary printed to stderr). |
 
 ## 🔧 Fix modes
 
@@ -228,6 +247,20 @@ Each file's read, transform, and write are isolated: a locked file (`EBUSY`/`EPE
 Add `--dry-run` to either `--fix` or `--fixall` to see which files would be rewritten (each is printed as `[dry-run] would rewrite <path>`) without touching anything on disk. Combine it with `--json` to get the same findings a real run would report, so you can review the diff a rewrite would produce before committing to it.
 
 > **Always run NormWind's autofix from a clean working tree under version control** (git or equivalent), and review the diff before committing. `--fix`/`--fixall` write through an atomic temp-file-then-rename per file, preserve Unix file modes, and refuse to replace a file that changed after it was read. A working-tree safety net (commit, stash, or branch) is still the only way to cheaply undo a rewrite you don't like. `--dry-run` is the no-risk way to preview first.
+
+### Layout, encoding, and JSX/TSX
+
+- **Layout is kept.** A rewrite keeps the class list's own line breaks and indentation. It does not join a multi-line class list onto one line.
+- **Non-UTF-8 files are skipped.** `--fix` skips a file that is not valid UTF-8 and reports it, instead of rewriting it.
+- **`--fixall` fixes a lone arbitrary class in JSX/TSX.** A single arbitrary class inside a `className="..."` or `class="..."` attribute in a `.tsx`, `.jsx`, `.ts`, or `.js` file is now fixed by `--fixall`. Before, it was reported but never fixed.
+
+### Fixing only changed files
+
+`--fix` and `--fixall` cannot be combined with `--diff-base`. A fix rewrites whole files, not just the changed lines, so NormWind refuses the combination with exit `2`. To fix only the files a branch touched, pass them as targets:
+
+```bash
+normwind --fix $(git diff --name-only origin/main)
+```
 
 ## 📁 File matching
 
@@ -255,14 +288,21 @@ npx @lunawerx/normwind "apps/web/**/*.{tsx,ts}"
 
 Use `--` to end flag parsing when a target itself starts with a dash: `npx @lunawerx/normwind -- -weird-dir`.
 
-A pattern that matches no lintable files now exits `2` (see [Exit codes](#exit-codes)); pass `--allow-empty` to keep the old exit-`0` behavior.
+With no patterns, NormWind walks the current directory.
+
+NormWind walks the tree itself; it does not use ripgrep. How a target argument is read:
+
+- **A path that exists is taken literally.** `[id].vue` and `app/[slug]/page.tsx` work as written. Square brackets are not glob syntax.
+- **Only `*`, `?`, and `{...}` are glob syntax.** Brace alternatives may contain wildcards, as in `src/{components,pages}/**/*.vue`.
+
+A pattern that matches nothing never widens to the whole tree. It exits `2` and names any file it refused, either because it is ignored or because it is not a supported type (see [Exit codes](#exit-codes)). Pass `--allow-empty` to exit `0` instead.
 
 ### 🙈 Ignoring paths
 
 Two ways to skip paths beyond the built-in generated-folder list:
 
 - **`--ignore <glob>`**: repeatable, always honored, on the CLI and via the GitHub Action's `ignore` input.
-- **`.normwindignore`**: a project-local file, one glob per line, `#` for comments, read automatically from the scanned directory. A bare directory name (no glob syntax) means everything under it, the same convention `.gitignore` uses.
+- **`.normwindignore`**: a project-local file, one glob per line, `#` for comments, read automatically from the scanned directory. An entry with no slash, such as `generated`, matches that name at any depth, and a bare directory name means everything under it. The entries follow the same idea as `.gitignore` lines, but `.gitignore` itself is **not** read, so add any entries it holds to `.normwindignore` or pass them with `--ignore`.
 
 `.normwindignore` is deliberately **not** read in GitHub Action mode. The file is checkout-controlled, so a pull request could otherwise edit it to silence the audit on the very files that PR changes. `--ignore` flags come from the workflow author, not the checkout, so they're always honored in both modes.
 
@@ -276,6 +316,7 @@ NormWind only audits and fixes class strings anchored to class-bearing attribute
 - Attribute names that merely *end* in `-class` (e.g. `data-class`) are excluded: only the exact attribute names above match.
 - Template-literal `${...}` interpolations no longer disqualify the whole literal; static chunks around an interpolation are still processed, and partial tokens straddling an interpolation boundary (e.g. `` h-${size} ``) are never touched.
 - Class strings containing a bare `*` outside `[...]`/`(...)` brackets are conservatively skipped by both the audit and the fixer.
+- Svelte and Astro: a `>` inside an unquoted `{...}` handler (`onclick={() => go()}`) no longer ends the tag early, so a class attribute after it is scanned.
 
 JavaScript, TypeScript, and JSX/TSX are parsed before extraction, and Vue SFC template/script boundaries are tracked structurally. Comments, serialized markup, regex literals, interpolated template text outside class props, `title="..."` text, and unrelated `{ class: "..." }` data objects are therefore excluded. If a supported JavaScript/TypeScript source block cannot be parsed safely, the file is reported as failed and is left untouched.
 
@@ -345,11 +386,14 @@ It's generated from Tailwind's own canonicalization engine for the exact Tailwin
 
 **Lookup order:**
 
-1. A project-local snapshot at `docs/reference/canonical-replacements.json`, if present.
-2. The package-bundled snapshot, only when its Tailwind version matches the active project/fallback engine.
-3. The active Tailwind version's live design-system canonicalizer, for cache misses or a missing/mismatched snapshot.
+1. The snapshot shipped inside the package, when its Tailwind version matches the active project/fallback engine. Only this package snapshot is read. A scanned project's own `docs/reference/canonical-replacements.json` is ignored, so a repository cannot choose what `--fix` writes. With `--theme-css`, the snapshot is skipped for that run.
+2. The active Tailwind version's live design-system canonicalizer, for cache misses or a mismatched snapshot.
 
-Disk-cache entries are validated against the installed Tailwind version before use and are written atomically. To keep scans of untrusted code resource-bounded, a single run refuses to send more than 1,000 unique cache misses through Tailwind's live canonicalizer; that condition is reported as a runtime error instead of risking a Node out-of-memory crash.
+**Live canonicalization has no CLI cap.** The CLI canonicalizes any number of unique misses. It starts a fresh Tailwind engine every 1,000 live canonicalizations so memory stays flat (about 580 MB plateau on a large scan). The GitHub Action keeps a ceiling of 10,000 unique live canonicalizations per run, to keep scans of untrusted code resource-bounded. Past that ceiling the run reports a runtime error instead of risking a Node out-of-memory crash.
+
+**Disk cache.** The CLI reads and writes `node_modules/.cache/normwinds/canonical-cache.json`. It writes only when `node_modules` already exists, and never creates it. Entries are keyed by the NormWind version, the Tailwind version, and the hash of the `--theme-css` file, so an upgrade or a theme change discards the cache. Entries are validated against the installed Tailwind version before use and are written atomically. The GitHub Action never writes the cache.
+
+Speed with a warm cache, measured on a generated 1,500-file project (11,335 findings): a cold audit took 7.6 s and a warm one 0.65 s; a cold `--fixall --dry-run` took 10.2 s and a warm one 1.9 s. CI runs and the Action are cold.
 
 Tailwind 4.0 does not expose the canonicalization API used by newer v4 releases. NormWind still audits and fixes shorthand groups on 4.0, but safely leaves arbitrary-value classes unchanged instead of applying newer bundled semantics.
 
@@ -382,14 +426,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: LunarWerxs/NormWind@v3
+      - uses: LunarWerxs/NormWind@v4
 ```
 
-The Action is bundled, cross-platform, and read-only. It needs no API token, performs no runtime package installation, emits inline annotations plus a job summary, and writes a machine-readable JSON report to the runner. The `report-path` output remains available to later steps in the same job, where you can inspect it or pass it to your artifact uploader.
+The Action is bundled, cross-platform, and read-only. It needs no API token, performs no runtime package installation, emits inline annotations plus a job summary, and writes a machine-readable JSON report to the runner. The `report-path` output remains available to later steps in the same job, where you can inspect it or pass it to your artifact uploader. If the output exceeds the Action's buffer, or a run times out, the step fails with a clear error message that says which limit was hit.
 
 For PR safety, Action mode treats the checkout strictly as data: it does not execute repository dependencies or tools, does not trust a repository-provided NormWind snapshot, and always uses the Tailwind engine bundled with that Action release. The standalone CLI retains project-version-aware Tailwind resolution for trusted local use.
 
-Pin `@v3.7.0` or the release commit SHA instead of `@v3` when you require an immutable dependency.
+`@v4` is a moving tag that each 4.x release advances. Pin a full release tag (`@vX.Y.Z`, listed under Releases) or the release commit SHA instead when you require an immutable dependency.
 
 <details>
 <summary><strong>Action inputs and outputs</strong></summary>
@@ -402,12 +446,13 @@ Inputs:
 | ----- | ------- | ------- |
 | `working-directory` | `.` | Directory to scan, relative to the repository root. |
 | `patterns` | all supported files | Newline-delimited file paths, directories, or globs. |
+| `allow-empty` | `false` | Succeed instead of failing when the `patterns` input matches no lintable file (for example a monorepo job whose package has no Tailwind sources yet). Without it, a typo'd pattern fails the step rather than going green having scanned nothing. |
 | `theme-css` | none | Tailwind CSS entry file used to resolve project theme variables. |
 | `suggest-named-theme-vars` | `false` | Suggest named theme utilities; requires `theme-css`. |
 | `fail-on-findings` | `true` | Fail CI when normalization findings exist. |
 | `max-annotations` | `10` | Inline annotation cap from `0` to `50`; every finding remains in the summary/report. |
 | `ignore` | none | Newline-delimited globs to skip. A `.normwindignore` file in the checkout is deliberately ignored in Action mode (the checkout is untrusted input), so use this workflow-authored input instead. |
-| `sarif-file` | none | Path, relative to the working directory, to write a SARIF 2.1.0 report to. Pair it with `github/codeql-action/upload-sarif` to surface findings in code scanning. |
+| `sarif-file` | none | Path, relative to the working directory, to write a SARIF 2.1.0 report to. Pair it with `github/codeql-action/upload-sarif` to surface findings in code scanning. Paths in the report are relative to the repository root when `working-directory` is set. |
 | `changed-lines-only` | `false` | Annotate, write SARIF for, and fail on only the findings on lines the change touches; the JSON report still lists every finding. Check out with `fetch-depth: 0` so the base branch is present. |
 | `diff-base` | `origin/<PR base branch>` | Ref `changed-lines-only` diffs against (its merge base with `HEAD`). Required outside a `pull_request` event. |
 | `baseline` | none | Path, relative to the working directory, to a baseline of per-file finding counts (see [Adopting on an existing codebase](#adopting-on-an-existing-codebase)). Only findings beyond a file's count fail, and a count that dropped fails until the baseline is lowered. The Action only reads it, never rewrites it. |
@@ -442,18 +487,26 @@ The baseline is a small JSON file of per-file finding counts (paths relative to 
 
 In the GitHub Action, pass the committed file through the `baseline` input. The Action only reads it. Because it lives in the checkout, a pull request that raises a count shows the change in its diff; guard the file with CODEOWNERS if that matters to you. The JSON report gains a `baseline` object (`path`, `suppressed`, `exceeded`, `stale`, `updated`) whenever `--baseline` is set.
 
+### Checking only changed lines
+
+`--diff-base <ref>` reports only findings on lines changed since the merge base of `<ref>`. A finding whose classes sit on different lines (a multi-line class list from one merge) is anchored at its first class and carries an `endLine` in `--json` and as `region.endLine` in SARIF. It counts as changed if any of its lines changed.
+
+`--diff-base` cannot be combined with `--fix` or `--fixall` (exit `2`); see [Fixing only changed files](#fixing-only-changed-files).
+
 ## 🧰 What's in the box
 
-The npm package intentionally publishes only runtime assets, brand assets, and reference docs:
+The npm package publishes only what `package.json` lists in `files`: the CLI, its runtime modules and vendored parser code, the canonical snapshot, and the docs that ship with it:
 
 - `bin/normwind.mjs`
+- `lib/*.mjs`
+- `lib/vendor/*.mjs`
 - `docs/reference/canonical-replacements.json`
 - `docs/reference/canonical-replacements.md`
-- `assets/`: logos and the share card
 - `README.md`
-- `package.json`
+- `LICENSE`
+- `THIRD-PARTY-NOTICES.md`
 
-Tests and fixtures live in the source repo but are excluded from the packed tarball.
+Tests, fixtures, the GitHub Action bundle, and brand assets live in the source repo but are excluded from the packed tarball.
 
 <details>
 <summary><strong>🧑💻 Development &amp; maintainer commands</strong></summary>
@@ -532,7 +585,7 @@ The `bun install` inside `deps:sync` will **not** move a pin that still satisfie
 npm run build:action && git add dist/
 ```
 
-`dist/` is generated, so neither side of a conflict is authoritative and a textual merge of two minified bundles is meaningless. Taking one side *looks* like it worked and then ships a stale bundle: the *action: committed bundle is current* check will fail, but only on the commit that carries the stale copy, which may not be the one that looked conflicted. That is precisely how it happened on `3fe92ad`, which went red on all seven CI legs.
+`dist/` is generated, so neither side of a conflict is authoritative and a textual merge of two minified bundles is meaningless. Taking one side *looks* like it worked and then ships a stale bundle: the *action: committed bundle is current* check will fail, but only on the commit that carries the stale copy, which may not be the one that looked conflicted. That is precisely how it happened on `3fe92ad`, which went red on every CI leg (five in the current matrix).
 
 You should not have to remember this. `.gitattributes` marks `dist/**` as `-merge`, so git refuses to invent a merge result there: it conflicts, leaves the current branch's copy in place, and writes **no conflict markers**, so there is no half-merged bundle to commit by accident. The full rule lives in `.gitattributes` next to that line, and every staleness error from `build:action` repeats it.
 
@@ -552,6 +605,40 @@ As of `eslint-plugin-tailwindcss` 4.x, that group table lives in NormWind's own 
 </details>
 
 ## 📜 Changelog
+
+<details>
+<summary><strong>v4.1.0</strong>: 2026-11-11 · theme-aware canonicalization, uncapped live canonicalization, stricter file matching and fixing</summary>
+
+<br/>
+
+**Fixes**
+
+- **Theme-aware canonicalization (`--theme-css`)**: with `--theme-css`, the project's own `@theme` drives canonicalization as well as merge safety. With `--radius-lg: 10px` in the theme, `rounded-[10px]` becomes `rounded-lg` and `rounded-[8px]` is left alone. The shipped snapshot is skipped for that run. Without `--theme-css`, a project that redefines theme scales can still get suggestions that assume Tailwind's default scale.
+- **Non-v4 Tailwind is refused**: if the scanned project's own installed `tailwindcss` is not v4, NormWind exits `2` with a one-line message and does not audit or rewrite it.
+- **Only the package snapshot is trusted**: a scanned project's own `docs/reference/canonical-replacements.json` is ignored, so a repository can no longer choose what `--fix` writes.
+- **Literal paths that contain brackets**: a path argument that exists is taken literally, so `[id].vue` and `app/[slug]/page.tsx` work. Only `*`, `?`, and `{...}` are glob syntax.
+- **Brace alternatives may contain wildcards**: `src/{components,pages}/**/*.vue` works.
+- **Patterns that match nothing never widen**: a pattern that matches no lintable file exits `2` and names any file it refused (ignored, or not a supported type). With no patterns, NormWind walks the current directory.
+- **`--fix`/`--fixall` refuse `--diff-base`**: a fix rewrites whole files, so the combination exits `2`. Pass the changed files as targets instead.
+- **Multi-line findings**: a finding whose classes sit on different lines is anchored at the first class and carries an `endLine` (in `--json` and SARIF `region.endLine`). `--diff-base` counts it as changed if any of its lines changed.
+- **Layout is kept**: a fix keeps the class list's own line breaks and indentation instead of joining everything onto one line.
+- **Non-UTF-8 files are skipped**: `--fix` skips and reports a file that is not valid UTF-8, instead of rewriting it.
+- **`--fixall` fixes lone arbitrary classes in JSX/TSX**: a single arbitrary class inside a `className="..."` or `class="..."` attribute in a `.tsx`, `.jsx`, `.ts`, or `.js` file is fixed. It was reported but never fixed.
+- **Svelte/Astro handlers**: a `>` inside an unquoted `{...}` handler (`onclick={() => go()}`) no longer ends the tag early, so a class attribute after it is scanned.
+- **Clear Action errors**: when output exceeds the buffer or a run times out, the Action fails with a message that names the limit that was hit.
+
+**Changes**
+
+- **No CLI cap on live canonicalization**: the CLI used to stop at a fixed number of unique cache misses. It now canonicalizes any number, starting a fresh Tailwind engine every 1,000 live canonicalizations so memory stays flat (about 580 MB plateau). The GitHub Action's ceiling is now 10,000 unique live canonicalizations per run (was 1,000).
+- **Disk cache**: the CLI writes `node_modules/.cache/normwinds/canonical-cache.json`, only when `node_modules` already exists. The key includes the NormWind version, the Tailwind version, and the `--theme-css` file's hash, so an upgrade or theme change discards it. The Action never writes it. On a generated 1,500-file project, a warm audit took 0.65 s against 7.6 s cold.
+- **Switch flags refuse values**: a boolean flag given a value (`--fix=false`) exits `2`. It used to turn the flag on.
+- **Maintenance flags run only in a checkout**: `--check-canonical`, `--extract-canonical`, `--write-canonical-files`, and `--cleanup-canonical-files` run only inside a NormWind checkout and exit `2` elsewhere.
+- **Theme `@import` warning**: an `@import` in the theme CSS that NormWind cannot follow (a bare package-style name, or `@import url(...)`) prints a one-time warning that names it.
+- **Action `allow-empty` input**: new input, default `false`. Set it to `true` to succeed when `patterns` matches no lintable file.
+- **Repository-relative SARIF paths**: when `working-directory` is set, SARIF paths are relative to the repository root.
+- **`eslint-plugin-tailwindcss` is no longer a dependency**: the shorthand group data is vendored in `lib/vendor/`.
+
+</details>
 
 <details>
 <summary><strong>v4.0.0</strong>: 2026-09-27 · Node 22 floor, gate on changed lines only, per-file baseline, Tailwind collapse merges</summary>
@@ -795,7 +882,7 @@ No. NormWind runs entirely against your local files and your project's installed
 NormWind requires Node.js `^22.18.0` or `>=24.11.0`, per its `package.json` engines field (Node 22.0-22.17 and 24.0-24.10 fall in the gap). Node 20 was dropped on 2026-09-10, after it reached end-of-life on 2026-04-30 and stopped receiving security patches; the floor narrowed further on 2026-09-14 to match `@babel/parser` 8's own declared engines range. It works against Tailwind CSS v4 projects: full shorthand and arbitrary-value canonicalization on Tailwind 4.1 through 4.3, and shorthand-only auditing on 4.0, since that release doesn't expose the canonicalization API NormWind depends on for arbitrary values.
 
 **Does it support Tailwind CSS v3?**
-The repo documents support for Tailwind CSS v4 only, spanning 4.0 through the bundled 4.3.3. Arbitrary-value canonicalization relies on Tailwind's `designSystem.canonicalizeCandidates` engine, a v4 API. No v3 compatibility is documented in the README or changelog, so treat NormWind as a v4-only tool unless a future release states otherwise.
+The repo documents support for Tailwind CSS v4 only, spanning 4.0 through the bundled 4.3.3. Arbitrary-value canonicalization relies on Tailwind's `designSystem.canonicalizeCandidates` engine, a v4 API. No v3 compatibility is documented in the README or changelog, so treat NormWind as a v4-only tool unless a future release states otherwise. If the scanned project's own installed `tailwindcss` is not v4, NormWind exits `2` with a one-line message and does not audit or rewrite it.
 
 **How is it different from `prettier-plugin-tailwindcss`?**
 Tailwind's own Prettier plugin sorts class names into a recommended order; by its own documentation it doesn't merge shorthand or touch arbitrary values. NormWind does the opposite job: it collapses verbose combinations like `px-4 py-4` into `p-4` and rewrites arbitrary values like `rounded-[24px]` into `rounded-3xl`. The two tools solve different problems and can be used together.

@@ -71,6 +71,15 @@ inputs:
     required: false
     default: ""
 
+  allow-empty:
+    description: >-
+      Succeed instead of failing when the patterns input matches no lintable
+      file (for example a monorepo job whose package has no Tailwind sources
+      yet). Without it, a typo'd pattern fails the step rather than going
+      green having scanned nothing.
+    required: false
+    default: "false"
+
 outputs:
   version:
     description: NormWind version used by the Action.

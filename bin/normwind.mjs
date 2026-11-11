@@ -14,6 +14,7 @@ import {
     lookupCanonicalFromMemo,
     peekCanonicalizerPromise,
     saveDiskCache,
+    warmCanonicalMemo,
 } from "../lib/canonical-cache.mjs";
 import { applyBaseline, readBaselineFile } from "../lib/baseline.mjs";
 import { cleanupCanonicalArtifacts, extractCanonicalReplacements } from "../lib/canonical-extract.mjs";
@@ -29,7 +30,8 @@ import {
     resolvePendingMergeChecks,
 } from "../lib/merge-safety.mjs";
 import { buildSarifReport } from "../lib/sarif.mjs";
-import { MAX_LIVE_CANONICALIZATION_CANDIDATES, MAX_SCANNED_FILE_BYTES } from "../lib/scan-config.mjs";
+import { useProjectThemeCss } from "../lib/design-system.mjs";
+import { MAX_SCANNED_FILE_BYTES } from "../lib/scan-config.mjs";
 import {
     detectComplexEquivalences,
     detectFamilyShorthand,
@@ -248,14 +250,16 @@ function emitKnownCanonicalFindings(snippet, lineStarts, { relativePath, localFo
             continue;
         }
 
-        parsedTokens.push(token);
+        // Each token keeps its own position so a multi-token finding can sit
+        // on the tokens it names (lib/shorthand.mjs locateSources).
+        const { line, column } = indexToLineCol(lineStarts, snippet.index + tokenMatch.index);
+        parsedTokens.push({ ...token, line, column });
 
         // v3 optimization: avoid the Tailwind canonicalizer for general
         // non-arbitrary tokens, but still report explicit known aliases.
         const knownCanonical = getKnownCanonicalClass(token.raw);
         if (knownCanonical || (token.importantPrefix && !token.importantSuffix)) {
             const canonical = knownCanonical ?? formatClass(token.variants, true, token.utility);
-            const { line, column } = indexToLineCol(lineStarts, snippet.index + tokenMatch.index);
             maybePushFinding(localFound, {
                 filePath: relativePath,
                 line,
@@ -397,15 +401,8 @@ async function collectStaticShorthandFindings(filePaths, { suggestNamedThemeVars
     }
 
     if (cacheMisses.length > 0) {
-        if (cacheMisses.length > MAX_LIVE_CANONICALIZATION_CANDIDATES) {
-            throw new Error(
-                `normwinds: refusing to live-canonicalize ${cacheMisses.length} unique cache misses in one run (limit: ${MAX_LIVE_CANONICALIZATION_CANDIDATES}). Split the scan, regenerate the canonical snapshot, or warm the cache in smaller batches.`,
-            );
-        }
-        const canonicalizeCandidate = await getCanonicalizeCandidate();
-        for (const raw of cacheMisses) {
-            canonicalizeCandidate(raw);
-        }
+        await getCanonicalizeCandidate();
+        await warmCanonicalMemo(cacheMisses);
     }
 
     // Pre-warm theme-var replacements (opt-in). Only when at least one
@@ -482,7 +479,20 @@ function printScanIssueSummary(skipped, failures) {
 }
 
 
-function printTextReport(findings, lintedFiles) {
+function nextStepHint({ fix = false, fixAll = false, dryRun = false } = {}) {
+    if (!fix) {
+        return "Run with --fix (or --fixall) to apply safe rewrites automatically.";
+    }
+    if (dryRun) {
+        return "Run again without --dry-run to apply the rewrites listed above.";
+    }
+    if (!fixAll) {
+        return "These remain after --fix: --fixall also rewrites .js/.ts-family files; anything else needs a manual change.";
+    }
+    return "These remain after --fixall and need a manual change.";
+}
+
+function printTextReport(findings, lintedFiles, fixOptions = {}) {
     if (findings.length === 0) {
         console.log(`normwinds v${NORMWINDS_VERSION}: no shorthand/canonical findings in ${lintedFiles} files.`);
         return;
@@ -502,7 +512,7 @@ function printTextReport(findings, lintedFiles) {
         );
     }
 
-    console.log("\nRun with --fix (or --fixall) to apply safe rewrites automatically.");
+    console.log(`\n${nextStepHint(fixOptions)}`);
 }
 
 // The maintenance modes return before any scanning happens.
@@ -512,10 +522,13 @@ function isMaintenanceMode({ checkCanonical, extractCanonical, cleanupCanonicalF
 
 // Each find*Error helper below returns the usage error to print, or null when
 // its checks pass. They run in main()'s original validation order.
-function findFlagInputError({ unknownFlags, missingValueFlags, invalidReporter, suggestNamedThemeVars, themeCssPath }) {
+function findFlagInputError({ unknownFlags, missingValueFlags, unexpectedValueFlags, invalidReporter, suggestNamedThemeVars, themeCssPath }) {
     if (unknownFlags.length > 0) {
         return `normwinds: unknown flag(s): ${unknownFlags.join(", ")}\n`
             + "Run `normwinds --help` for the list of supported flags.";
+    }
+    if (unexpectedValueFlags.length > 0) {
+        return `normwinds: ${unexpectedValueFlags.join(", ")}: this flag is a switch and takes no value (pass it to turn it on, leave it out to keep it off).`;
     }
     if (missingValueFlags.length > 0) {
         return `normwinds: ${missingValueFlags.join(", ")} requires a value (e.g. --theme-css src/assets/main.css).`;
@@ -537,9 +550,15 @@ function findMaintenanceFixError(maintenanceMode, { fix, dryRun }) {
     return null;
 }
 
-function findDiffBaseFlagError(maintenanceMode, { diffBase }) {
+function findDiffBaseFlagError(maintenanceMode, { diffBase, fix }) {
     if (diffBase !== null && !diffBase.trim()) {
         return "normwinds: --diff-base requires a ref (e.g. --diff-base origin/main).";
+    }
+    // --diff-base narrows the REPORT to changed lines; a fix rewrites whole
+    // files. Together they used to produce a repository-wide diff on exactly
+    // the legacy codebase --diff-base exists to adopt gently.
+    if (diffBase !== null && fix) {
+        return "normwinds: --fix/--fixall cannot be combined with --diff-base: a fix rewrites every finding in the files it touches, not just changed lines. Pass the changed files as targets instead (e.g. normwinds --fix $(git diff --name-only origin/main)).";
     }
     if (maintenanceMode && diffBase !== null) {
         return "normwinds: --diff-base cannot be combined with --check-canonical, --extract-canonical, or --cleanup-canonical-files.";
@@ -639,7 +658,7 @@ async function handleEarlyExit(options) {
 
 // Print the scan report in the requested format (sarif/json/text). Split out
 // of main's reporter if/else-if/else chain.
-function printScanReport(reporter, findings, lintedFiles, { diffGate = null, baseline = null } = {}) {
+function printScanReport(reporter, findings, lintedFiles, { diffGate = null, baseline = null, fixOptions = {} } = {}) {
     if (reporter === "sarif") {
         console.log(JSON.stringify(buildSarifReport(findings, lintedFiles, {
             version: NORMWINDS_VERSION,
@@ -665,13 +684,33 @@ function printScanReport(reporter, findings, lintedFiles, { diffGate = null, bas
             ),
         );
     } else {
-        printTextReport(findings, lintedFiles);
+        printTextReport(findings, lintedFiles, fixOptions);
+    }
+}
+
+// The maintenance modes read, write or delete ./docs/reference/*, which is
+// NormWind's own reference data. Run anywhere else, --check-canonical always
+// failed and --cleanup-canonical-files deleted a project's files unasked, so
+// they only run inside a NormWind checkout.
+async function isNormwindCheckout() {
+    try {
+        const pkg = JSON.parse(await fs.readFile(path.resolve(process.cwd(), "package.json"), "utf8"));
+        return pkg?.name === "@lunawerx/normwind";
+    } catch {
+        return false;
     }
 }
 
 // Run --cleanup-canonical-files / --check-canonical / --extract-canonical.
 // Returns true when one of them ran, so main() returns without scanning.
 async function runMaintenanceMode({ cleanupCanonicalFiles, checkCanonical, extractCanonical, writeCanonicalFiles }) {
+    if ((cleanupCanonicalFiles || checkCanonical || extractCanonical) && !(await isNormwindCheckout())) {
+        console.error(
+            "normwinds: --check-canonical, --extract-canonical and --cleanup-canonical-files maintain NormWind's own reference data and only run inside a NormWind checkout (package.json name @lunawerx/normwind). The installed package already carries a validated snapshot.",
+        );
+        process.exitCode = 2;
+        return true;
+    }
     if (cleanupCanonicalFiles) {
         await cleanupCanonicalArtifacts();
         console.log(`normwinds v${NORMWINDS_VERSION}: removed canonical generated artifacts (if present).`);
@@ -710,42 +749,40 @@ async function loadScanCaches() {
 
 async function loadTargetFiles(patterns, ignorePatterns) {
     await loadIgnoreConfig(ignorePatterns);
-    const [filePaths] = await Promise.all([listTargetFiles(patterns), loadScanCaches()]);
-    return filePaths;
+    const [targets] = await Promise.all([listTargetFiles(patterns), loadScanCaches()]);
+    return targets;
 }
 
 // Exit 2, not 0. A typo'd path in a CI step used to be indistinguishable
-// from a clean audit, so the job went green having scanned nothing.
+// from a clean audit, so the job went green having scanned nothing. A file
+// argument that is ignored or of an unsupported type matches nothing too
+// (it never widens the scan), and is named so the user sees why.
 // Returns true when the caller should return.
-function stopOnEmptyMatch(patterns, filePaths, allowEmpty) {
-    if (patterns.length === 0 || filePaths.length > 0) {
+function stopOnEmptyMatch(patterns, { files, refusedFiles }, allowEmpty) {
+    if (patterns.length === 0 || files.length > 0 || allowEmpty) {
         return false;
     }
     console.error(
         `normwinds: the given pattern(s) matched no lintable files: ${patterns.join(", ")}`,
     );
+    if (refusedFiles.length > 0) {
+        console.error(
+            `Not scanned (ignored, or not a .vue/.svelte/.astro/.html/.js/.ts-family file): ${refusedFiles.join(", ")}`,
+        );
+    }
     console.error(
         "Check the path, or pass --allow-empty if matching nothing is expected.",
     );
-    if (allowEmpty) {
-        return false;
-    }
     process.exitCode = 2;
     return true;
 }
 
-// Apply --fix/--fixall. Returns { fixIssues, changedLines }, or null when
-// re-reading the diff failed (already reported) so the caller returns.
-async function runFixPass(filePaths, changedLines, { fixAll, suggestNamedThemeVars, themeCssPath, dryRun, diffBase }) {
+// Apply --fix/--fixall and return how many files could not be written.
+// --diff-base is refused with a fix (findDiffBaseFlagError), so no finding
+// line read before the rewrite needs re-reading after it.
+async function runFixPass(filePaths, { fixAll, suggestNamedThemeVars, themeCssPath, dryRun }) {
     const fixResult = await applyFixes(filePaths, { fixAll, suggestNamedThemeVars, themeCssPath, dryRun });
-    const fixIssues = fixResult.failed + fixResult.skipped;
-    // A fix can add or remove lines, which would shift later findings off
-    // the line numbers read above, so read the diff again after writing.
-    if (!changedLines || dryRun) {
-        return { fixIssues, changedLines };
-    }
-    const diff = await readDiffBaseLines(diffBase);
-    return diff ? { fixIssues, changedLines: diff.changedLines } : null;
+    return fixResult.failed + fixResult.skipped;
 }
 
 // The count ratchet runs after the scan, on the finished finding list, so
@@ -819,19 +856,19 @@ async function runAudit(parsedArgs) {
         changedLines = diff.changedLines;
     }
 
-    const filePaths = await loadTargetFiles(patterns, ignorePatterns);
-    if (stopOnEmptyMatch(patterns, filePaths, allowEmpty)) {
-        return;
+    // The project theme judges every rewrite, so it is in place before the
+    // caches (keyed by it) are read. The preflight already loaded it.
+    if (themeCssPath) {
+        await useProjectThemeCss(themeCssPath);
     }
 
-    let fixIssues = 0;
-    if (fix) {
-        const fixPass = await runFixPass(filePaths, changedLines, parsedArgs);
-        if (!fixPass) {
-            return;
-        }
-        ({ fixIssues, changedLines } = fixPass);
+    const targets = await loadTargetFiles(patterns, ignorePatterns);
+    if (stopOnEmptyMatch(patterns, targets, allowEmpty)) {
+        return;
     }
+    const filePaths = targets.files;
+
+    const fixIssues = fix ? await runFixPass(filePaths, parsedArgs) : 0;
 
     const scanResult = await collectStaticShorthandFindings(filePaths, { suggestNamedThemeVars, themeCssPath });
     const { lintedFiles, skipped: scanSkipped, failures: scanFailures } = scanResult;
@@ -843,7 +880,11 @@ async function runAudit(parsedArgs) {
     const baselined = await applyBaselineGate(scanResult.findings, filePaths, scanIssues, parsedArgs);
     const { findings, diffGate } = applyDiffGate(baselined.findings, changedLines, diffBase, filePaths);
 
-    printScanReport(reporter, findings, lintedFiles, { diffGate, baseline: baselined.summary });
+    printScanReport(reporter, findings, lintedFiles, {
+        diffGate,
+        baseline: baselined.summary,
+        fixOptions: { fix, fixAll: parsedArgs.fixAll, dryRun: parsedArgs.dryRun },
+    });
 
     process.exitCode = auditExitCode(fixIssues, scanIssues, findings.length);
 }
@@ -862,8 +903,16 @@ async function main() {
     await runAudit(parsedArgs);
 }
 
+// A `normwinds:` error is an expected refusal (an unsupported Tailwind, an
+// Action limit, an unreadable theme) and its message says everything; only an
+// unexpected crash gets the stack trace a bug report needs.
 main().catch((error) => {
-    console.error("normwinds: failed to run shorthand audit.");
-    console.error(error);
+    const message = error?.message || String(error);
+    if (message.startsWith("normwinds:")) {
+        console.error(message);
+    } else {
+        console.error("normwinds: failed to run shorthand audit.");
+        console.error(error);
+    }
     process.exitCode = 2;
 });

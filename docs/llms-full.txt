@@ -25,10 +25,15 @@ a local one-off check and as CI enforcement so utility bloat never lands on `mai
 
 ## Why the rewrites can be trusted
 
-- Shorthand groups come from `eslint-plugin-tailwindcss`'s own utility-group definitions.
+- Shorthand groups come from a vendored copy of `eslint-plugin-tailwindcss` v3.18.3's
+  utility-group definitions. `eslint-plugin-tailwindcss` is not a dependency.
 - Canonical values come from Tailwind's own `designSystem.canonicalizeCandidates` engine.
 - NormWind resolves the Tailwind install inside the scanned project first, so fixes match
-  the version that will actually build it.
+  the version that will actually build it. If that install is not Tailwind v4, NormWind
+  exits 2 and does not audit or rewrite the project.
+- Canonicalization and merge safety use Tailwind's default theme unless `--theme-css <file>`
+  is given. With it, the project's own `@theme` drives canonicalization too. Without it, a
+  project that redefines theme scales can get suggestions that assume the default scale.
 - A merge is applied only when it cannot change the rendered CSS: if another utility in the
   same class list targets the same property at a different value, NormWind resolves the
   before/after class lists through Tailwind's own engine and skips the merge if the
@@ -66,24 +71,39 @@ with `--update-baseline` (creates the file, then only lowers counts), `--extract
 --write-canonical-files`, `--check-canonical`, `--cleanup-canonical-files`,
 `--suggest-named-theme-vars --theme-css <path>` (opt-in, off by default).
 
+An `@import` in the `--theme-css` file that NormWind cannot follow (a bare package-style
+name, or `@import url(...)`) prints a one-time warning that names it.
+
+`--diff-base <ref>` reports only findings on lines changed since the merge base of `<ref>`.
+It cannot be combined with `--fix` or `--fixall`. To fix only changed files, pass them as
+targets, e.g. `npx @lunawerx/normwind --fix $(git diff --name-only origin/main)`.
+
+Paths: a path argument that exists is taken literally (`[id].vue` works). Only `*`, `?`,
+and `{...}` are glob syntax. NormWind walks the tree itself and does not read `.gitignore`;
+use `.normwindignore` or `--ignore`.
+
 ## Exit codes
 
 - `0`: nothing to clean up, or a requested maintenance command completed.
 - `1`: audit findings exist, or canonical drift was detected.
-- `2`: usage/runtime error, a pattern matched no lintable files (pass `--allow-empty` for
-  `0` instead), an incompatible flag combination, or `--fix`/`--fixall` finished with files
-  skipped or failed.
+- `2`: usage/runtime error, including: a pattern matched no lintable files (the message
+  names any file refused as ignored or unsupported; pass `--allow-empty` for `0` instead);
+  a switch flag given a value (`--fix=false`); `--fix`/`--fixall` combined with
+  `--diff-base`; a maintenance flag run outside a NormWind checkout; the project's
+  `tailwindcss` is not v4; or `--fix`/`--fixall` finished with files skipped or failed.
+  `--fix` also skips and reports a file that is not valid UTF-8.
 
 ## GitHub Action
 
-A first-party GitHub Action (`LunarWerxs/NormWind@v3`) annotates pull requests inline and
+A first-party GitHub Action (`LunarWerxs/NormWind@v4`) annotates pull requests inline and
 fails the job when findings exist. It emits up to 10 inline annotations by default
 (configurable from 0 to 50 via the `max-annotations` input); every finding still lands in
 the job summary and the JSON report regardless of that cap. A single run also refuses to
-push more than 1,000 unique cache misses through the live canonicalizer, so scanning
-untrusted code cannot balloon into an out-of-memory crash. `.normwindignore` is
-deliberately not read in Action mode (the checkout is untrusted input); use the workflow's
-`ignore` input instead.
+go past 10,000 unique live canonicalizations, so scanning untrusted code cannot balloon
+into an out-of-memory crash. The Action never writes the disk cache. The `allow-empty`
+input (default `false`) makes a `patterns` value that matches nothing succeed instead of
+fail. `.normwindignore` is deliberately not read in Action mode (the checkout is untrusted
+input); use the workflow's `ignore` input instead.
 
 ## Pricing
 
@@ -134,6 +154,12 @@ compares" above.
 - A conservative merge policy means an unusual class list can keep a merge NormWind could
   not prove safe; that is the intended, safe outcome, not a bug.
 - `.normwindignore` is read on the CLI but not in GitHub Action mode, by design.
+- Physical pairs merged into logical utilities (`ml-2 mr-2` -> `mx-2`, `pl`/`pr` -> `px`) are
+  identical in horizontal writing modes but can differ in vertical writing modes
+  (`writing-mode: vertical-*`), where the inline axis is vertical.
+- Merge safety is proven per string literal. Sibling strings inside one `cn()` or `clsx()`
+  call are not compared with each other, so a conflict split across two strings is not
+  caught unless `twMerge` is used.
 
 ## Links
 

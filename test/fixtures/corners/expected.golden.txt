@@ -23,10 +23,10 @@ export const TopRadius = () => (
 export const AllRadius = () => (
     <div className="rounded-tl-md rounded-tr-md rounded-br-md rounded-bl-md">all corners</div>
                     ~~~~~~~~~~~~~ ~~~~~~~~~~~~~ ~~~~~~~~~~~~~ ~~~~~~~~~~~~~
-!!! tailwindcss/enforces-shorthand: Classnames 'rounded-bl-md, rounded-br-md' could be replaced by the 'rounded-b-md' shorthand!
 !!! tailwindcss/enforces-shorthand: Classnames 'rounded-tl-md, rounded-bl-md' could be replaced by the 'rounded-l-md' shorthand!
 !!! tailwindcss/enforces-shorthand: Classnames 'rounded-tl-md, rounded-tr-md' could be replaced by the 'rounded-t-md' shorthand!
 !!! tailwindcss/enforces-shorthand: Classnames 'rounded-tr-md, rounded-br-md' could be replaced by the 'rounded-r-md' shorthand!
+!!! tailwindcss/enforces-shorthand: Classnames 'rounded-bl-md, rounded-br-md' could be replaced by the 'rounded-b-md' shorthand!
 );
 
 export const AllSideRadius = () => (
@@ -38,9 +38,9 @@ export const AllSideRadius = () => (
 export const BorderSides = () => (
     <div className="border-t border-r border-b border-l">border box</div>
                     ~~~~~~~~ ~~~~~~~~ ~~~~~~~~ ~~~~~~~~
-!!! tailwindcss/enforces-shorthand: Classnames 'border-l, border-r' could be replaced by the 'border-x' shorthand!
 !!! tailwindcss/enforces-shorthand: Classnames 'border-t, border-b' could be replaced by the 'border-y' shorthand!
 !!! tailwindcss/enforces-shorthand: Classnames 'border-t, border-r, border-b, border-l' could be replaced by the 'border' shorthand!
+!!! tailwindcss/enforces-shorthand: Classnames 'border-l, border-r' could be replaced by the 'border-x' shorthand!
 );
 
 export const HoverCorners = () => (

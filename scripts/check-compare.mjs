@@ -3,10 +3,11 @@
  * Canonical snapshot parity test.
  *
  * Runs every fixture twice:
- *   1. without docs/reference/canonical-replacements.json
- *      so NormWind must ask Tailwind's live design-system canonicalizer;
- *   2. with the committed docs/reference snapshot copied into the temp cwd
- *      so NormWind should resolve canonical arbitrary values from the snapshot.
+ *   1. with NORMWIND_DISABLE_CANONICAL_SNAPSHOT=1, so NormWind must ask
+ *      Tailwind's live design-system canonicalizer;
+ *   2. normally, so NormWind resolves canonical arbitrary values from the
+ *      snapshot shipped in the package (in this checkout, the committed
+ *      docs/reference file; a scanned project's own copy is never read).
  *
  * The finding output must be identical. Any diff means the committed snapshot
  * has drifted from Tailwind's live canonicalization behavior for the tested
@@ -26,8 +27,6 @@ const execFileAsync = promisify(execFile);
 const REPO_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, "$1"), "..");
 const NORMWIND_BIN = path.join(REPO_ROOT, "bin", "normwind.mjs");
 const FIXTURES_ROOT = path.join(REPO_ROOT, "test", "fixtures");
-const SNAPSHOT_JSON = path.join(REPO_ROOT, "docs", "reference", "canonical-replacements.json");
-const SNAPSHOT_MD = path.join(REPO_ROOT, "docs", "reference", "canonical-replacements.md");
 const NODE_BIN = process.execPath;
 const ALLOWED_EXTENSIONS = new Set([".vue", ".tsx", ".ts", ".jsx", ".js", ".mjs"]);
 
@@ -59,18 +58,10 @@ async function findInputFile(fixtureDir) {
     return null;
 }
 
-async function makeRunDir(fixtureDir, inputName, { withSnapshot }) {
+async function makeRunDir(fixtureDir, inputName) {
     const dir = path.join(os.tmpdir(), `normwind-compare-${randomUUID()}`);
     await fs.mkdir(dir, { recursive: true });
     await fs.copyFile(path.join(fixtureDir, inputName), path.join(dir, inputName));
-
-    if (withSnapshot) {
-        const referenceDir = path.join(dir, "docs", "reference");
-        await fs.mkdir(referenceDir, { recursive: true });
-        await fs.copyFile(SNAPSHOT_JSON, path.join(referenceDir, path.basename(SNAPSHOT_JSON)));
-        await fs.copyFile(SNAPSHOT_MD, path.join(referenceDir, path.basename(SNAPSHOT_MD)));
-    }
-
     return dir;
 }
 
@@ -120,8 +111,8 @@ async function compareFixture(fixture) {
         return { fixture, ok: false, error: "missing input.* fixture" };
     }
 
-    const liveDir = await makeRunDir(fixtureDir, inputName, { withSnapshot: false });
-    const snapshotDir = await makeRunDir(fixtureDir, inputName, { withSnapshot: true });
+    const liveDir = await makeRunDir(fixtureDir, inputName);
+    const snapshotDir = await makeRunDir(fixtureDir, inputName);
 
     try {
         const [liveRun, snapshotRun] = await Promise.all([

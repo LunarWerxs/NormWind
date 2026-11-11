@@ -13,11 +13,11 @@
     <button
         class="h-5 w-5 inline-flex items-center
                ~~~ ~~~
-!!! tailwindcss/enforces-shorthand: Classnames 'px-2, py-2' could be replaced by the 'p-2' shorthand!
 !!! tailwindcss/enforces-shorthand: Classnames 'w-5, h-5' could be replaced by the 'size-5' shorthand!
                data-[state=active]:bg-blue-500
                px-2 py-2"
                ~~~~ ~~~~
+!!! tailwindcss/enforces-shorthand: Classnames 'px-2, py-2' could be replaced by the 'p-2' shorthand!
     >toggle</button>
 </template>
 
@@ -38,7 +38,9 @@
 
     <!-- Same pattern with width-first/height-first size shorthand mixed in. -->
     <button
-        class="size-5 inline-flex items-center data-[state=active]:bg-blue-500 p-2"
+        class="size-5 inline-flex items-center
+               data-[state=active]:bg-blue-500
+               p-2"
     >toggle</button>
 </template>
 

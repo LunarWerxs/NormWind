@@ -13,12 +13,6 @@
       "filePath": "input.tsx",
       "line": 21,
       "column": 21,
-      "message": "Classnames 'rounded-bl-md, rounded-br-md' could be replaced by the 'rounded-b-md' shorthand!"
-    },
-    {
-      "filePath": "input.tsx",
-      "line": 21,
-      "column": 21,
       "message": "Classnames 'rounded-tl-md, rounded-bl-md' could be replaced by the 'rounded-l-md' shorthand!"
     },
     {
@@ -30,20 +24,20 @@
     {
       "filePath": "input.tsx",
       "line": 21,
-      "column": 21,
+      "column": 35,
       "message": "Classnames 'rounded-tr-md, rounded-br-md' could be replaced by the 'rounded-r-md' shorthand!"
+    },
+    {
+      "filePath": "input.tsx",
+      "line": 21,
+      "column": 49,
+      "message": "Classnames 'rounded-bl-md, rounded-br-md' could be replaced by the 'rounded-b-md' shorthand!"
     },
     {
       "filePath": "input.tsx",
       "line": 25,
       "column": 21,
       "message": "Classnames 'rounded-t-xl, rounded-r-xl, rounded-b-xl, rounded-l-xl' could be replaced by the 'rounded-xl' shorthand!"
-    },
-    {
-      "filePath": "input.tsx",
-      "line": 29,
-      "column": 21,
-      "message": "Classnames 'border-l, border-r' could be replaced by the 'border-x' shorthand!"
     },
     {
       "filePath": "input.tsx",
@@ -56,6 +50,12 @@
       "line": 29,
       "column": 21,
       "message": "Classnames 'border-t, border-r, border-b, border-l' could be replaced by the 'border' shorthand!"
+    },
+    {
+      "filePath": "input.tsx",
+      "line": 29,
+      "column": 30,
+      "message": "Classnames 'border-l, border-r' could be replaced by the 'border-x' shorthand!"
     },
     {
       "filePath": "input.tsx",

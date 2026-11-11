@@ -7,13 +7,13 @@
       "filePath": "input.vue",
       "line": 13,
       "column": 16,
-      "message": "Classnames 'px-2, py-2' could be replaced by the 'p-2' shorthand!"
+      "message": "Classnames 'w-5, h-5' could be replaced by the 'size-5' shorthand!"
     },
     {
       "filePath": "input.vue",
-      "line": 13,
+      "line": 15,
       "column": 16,
-      "message": "Classnames 'w-5, h-5' could be replaced by the 'size-5' shorthand!"
+      "message": "Classnames 'px-2, py-2' could be replaced by the 'p-2' shorthand!"
     }
   ]
 }

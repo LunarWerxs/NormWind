@@ -10,7 +10,9 @@
 
     <!-- Same pattern with width-first/height-first size shorthand mixed in. -->
     <button
-        class="size-5 inline-flex items-center data-[state=active]:bg-blue-500 p-2"
+        class="size-5 inline-flex items-center
+               data-[state=active]:bg-blue-500
+               p-2"
     >toggle</button>
 </template>
 

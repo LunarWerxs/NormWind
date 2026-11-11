@@ -11,8 +11,8 @@ Example:
 
 What it does:
     0. Pre-flight (no mutation): runs the complete npm test gate and validates
-       git state (on main, clean tree, not behind origin/main) and GitHub
-       credentials.
+       git state (on main, clean tree, HEAD == origin/main so CI has run on
+       the commit being released) and GitHub credentials.
     1. Bumps the version in package.json, syncs package-lock.json and the
        version the site states (docs/index.html, docs/llms-full.txt), then
        runs `npm publish --dry-run` at the new version to catch npm
@@ -20,11 +20,16 @@ What it does:
        bump is restored if the dry-run fails).
     2. Commits, tags, and pushes to GitHub (preferring GITHUB_TOKEN from the
        process environment, then the gh CLI keyring, then github_pat from .env)
-    3. Creates a GitHub release via the API
-    4. Waits for the "Release" GitHub Actions workflow (triggered by the tag
+    3. Waits for the "Release" GitHub Actions workflow (triggered by the tag
        push) to publish to npm with --provenance, then verifies the new
        version is live on the registry. Pass --publish-locally to publish
        from this machine instead (requires NODE_AUTH_TOKEN in .env).
+    4. Only after npm has the version: creates the GitHub release via the API
+       and moves the major Action alias (`v<major>`, used as
+       `LunarWerxs/NormWind@v4`) to this release commit.
+
+    Re-running with the same version after a failed step is safe: every step
+    skips what already exists (bump, commit, tag, push, GitHub release).
 
 Single source of truth:
     bin/normwind.mjs is the only CLI implementation. There is no longer a
@@ -43,6 +48,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 
 # --------------------------------------------------------------------------- #
@@ -54,14 +60,28 @@ PACKAGE_JSON = ROOT / "package.json"
 README_FILE = ROOT / "README.md"
 ENV_FILE = ROOT / ".env"
 
+def _full_version(version: str) -> str:
+    return version
+
+
+def _major_version(version: str) -> str:
+    return version.split(".")[0]
+
+
 # Where the site says which version npx installs. Nothing moved these on release, so the site
 # said v3.8.0 for weeks after 3.8.1 shipped; the bump now rewrites them with package.json.
-SITE_VERSION_SPOTS = [
-    (ROOT / "docs" / "index.html", re.compile(r'("softwareVersion": ")\d+\.\d+\.\d+(")')),
-    (ROOT / "docs" / "index.html", re.compile(r"(@lunawerx/normwind · v)\d+\.\d+\.\d+( ·)")),
-    (ROOT / "docs" / "llms-full.txt", re.compile(r"(\(current version )\d+\.\d+\.\d+(,)")),
+# Each spot is (file, pattern with a named `version` group, value for this release). Every spot
+# must match exactly once or the release stops. The Action alias spots take the major only,
+# because users pin `LunarWerxs/NormWind@v4`, not a full version.
+SITE_VERSION_SPOTS: list[tuple[Path, re.Pattern[str], Callable[[str], str]]] = [
+    (ROOT / "docs" / "index.html", re.compile(r'"softwareVersion": "(?P<version>\d+\.\d+\.\d+)"'), _full_version),
+    (ROOT / "docs" / "index.html", re.compile(r"@lunawerx/normwind · v(?P<version>\d+\.\d+\.\d+) ·"), _full_version),
+    (ROOT / "docs" / "llms-full.txt", re.compile(r"\(current version (?P<version>\d+\.\d+\.\d+),"), _full_version),
+    (ROOT / "README.md", re.compile(r"LunarWerxs/NormWind@v(?P<version>\d+)(?![\d.])"), _major_version),
+    (ROOT / "docs" / "llms-full.txt", re.compile(r"LunarWerxs/NormWind@v(?P<version>\d+)(?![\d.])"), _major_version),
+    (ROOT / "docs" / "index.html", re.compile(r"LunarWerxs/NormWind@v(?P<version>\d+)(?![\d.])"), _major_version),
 ]
-SITE_VERSION_FILES = sorted({str(path.relative_to(ROOT).as_posix()) for path, _ in SITE_VERSION_SPOTS})
+SITE_VERSION_FILES = sorted({str(path.relative_to(ROOT).as_posix()) for path, _, _ in SITE_VERSION_SPOTS})
 
 GITHUB_REPO = "LunarWerxs/NormWind"
 NPM_REGISTRY = "https://registry.npmjs.org/"
@@ -82,7 +102,11 @@ def load_env(path: Path) -> dict[str, str]:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
-        env[key.strip()] = value.strip()
+        value = value.strip()
+        # KEY="value" and KEY='value' store value (one matching pair of quotes only).
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        env[key.strip()] = value
     return env
 
 
@@ -199,8 +223,11 @@ def step(label: str) -> None:
     print(f"\n{'='*60}\n  {label}\n{'='*60}")
 
 
-def github_api(method: str, path: str, body: dict | None, token: str) -> dict:
-    """Make a GitHub REST API call and return the parsed JSON response."""
+def github_api(
+    method: str, path: str, body: dict | None, token: str, *, allow_missing: bool = False
+) -> dict | None:
+    """Make a GitHub REST API call and return the parsed JSON response.
+    With allow_missing, a 404 returns None instead of exiting."""
     url = f"https://api.github.com{path}"
     data = json.dumps(body).encode() if body else None
     req = urllib.request.Request(
@@ -219,6 +246,8 @@ def github_api(method: str, path: str, body: dict | None, token: str) -> dict:
         with urllib.request.urlopen(req, timeout=30) as resp:
             return json.loads(resp.read())
     except urllib.error.HTTPError as exc:
+        if allow_missing and exc.code == 404:
+            return None
         body_text = exc.read().decode(errors="replace")
         sys.exit(f"GitHub API error {exc.code}: {body_text}")
 
@@ -295,13 +324,17 @@ def assert_git_state() -> None:
     print("  Working tree is clean.")
 
     run(["git", "fetch", "origin", "main", "--quiet"])
-    behind_count = run(["git", "rev-list", "--count", "HEAD..origin/main"])
-    if behind_count != "0":
+    head = run(["git", "rev-parse", "HEAD"])
+    origin_main = run(["git", "rev-parse", "origin/main"])
+    if head != origin_main:
+        ahead = run(["git", "rev-list", "--count", "origin/main..HEAD"])
+        behind = run(["git", "rev-list", "--count", "HEAD..origin/main"])
         sys.exit(
-            f"Local main is behind origin/main by {behind_count} commit(s). "
-            "Pull first: git pull origin main"
+            f"Local main is not origin/main: {ahead} commit(s) ahead, {behind} behind. "
+            "Only a commit that origin/main has and CI has run on can be released. "
+            "Push your commits (git push origin main), let CI pass, then re-run this script."
         )
-    print("  Local main is up to date with origin/main.")
+    print("  HEAD matches origin/main (the commit CI has run on).")
 
 
 def _npm_userconfig(npm_token: str) -> str:
@@ -351,14 +384,17 @@ def bump_version(new_version: str) -> str:
     pkg = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
     old_version = pkg["version"]
     if old_version == new_version:
-        print(f"  Already at {new_version}, nothing to bump.")
-    else:
-        pkg["version"] = new_version
-        PACKAGE_JSON.write_text(
-            json.dumps(pkg, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-        print(f"  {old_version} -> {new_version}")
+        # A previous run already bumped and committed this version (the tree is clean,
+        # so the lock and site files were synced in that commit too). Nothing to redo.
+        print(f"  Already at {new_version}: skipping the bump, lock sync and site sync.")
+        return old_version
+
+    pkg["version"] = new_version
+    PACKAGE_JSON.write_text(
+        json.dumps(pkg, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    print(f"  {old_version} -> {new_version}")
 
     print("  Syncing package-lock.json (npm install --package-lock-only)")
     _npm_run(["install", "--package-lock-only"])
@@ -367,12 +403,24 @@ def bump_version(new_version: str) -> str:
     return old_version
 
 
+def rewrite_version_spot(text: str, pattern: re.Pattern[str], value: str) -> tuple[str, int]:
+    """Replace the `version` group of every match of `pattern`; returns (new text, hit count)."""
+
+    def replace(m: re.Match[str]) -> str:
+        whole = m.group(0)
+        start = m.start("version") - m.start(0)
+        end = m.end("version") - m.start(0)
+        return whole[:start] + value + whole[end:]
+
+    return pattern.subn(replace, text)
+
+
 def sync_site_version(new_version: str) -> None:
     """Write `new_version` into every spot the site names the version; a spot that is gone fails loudly."""
     texts: dict[Path, str] = {}
-    for path, pattern in SITE_VERSION_SPOTS:
+    for path, pattern, to_value in SITE_VERSION_SPOTS:
         text = texts.get(path) or path.read_text(encoding="utf-8")
-        text, hits = pattern.subn(lambda m: f"{m.group(1)}{new_version}{m.group(2)}", text)
+        text, hits = rewrite_version_spot(text, pattern, to_value(new_version))
         if hits != 1:
             sys.exit(f"{path.relative_to(ROOT)}: expected one version spot for {pattern.pattern!r}, found {hits}")
         texts[path] = text
@@ -381,41 +429,102 @@ def sync_site_version(new_version: str) -> None:
     print(f"  Site version -> {new_version} ({', '.join(SITE_VERSION_FILES)})")
 
 
+def _git_auth_env(github_pat: str) -> dict[str, str]:
+    """Pass the PAT to git through an ephemeral config environment. It never
+    appears in argv or .git/config, so an interruption cannot leave a
+    credential embedded in the repository's remote URL."""
+    basic_auth = base64.b64encode(
+        f"x-access-token:{github_pat}".encode("utf-8")
+    ).decode("ascii")
+    return {
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
+        "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {basic_auth}",
+    }
+
+
+def _remote_ref_sha(ref: str, github_pat: str) -> str:
+    """The commit sha origin has for `ref` (e.g. refs/tags/v4.0.0), or "" if it has none."""
+    out = run(["git", "ls-remote", "origin", ref], env_extra=_git_auth_env(github_pat))
+    for line in out.splitlines():
+        sha, _, name = line.partition("\t")
+        if name == ref:
+            return sha
+    return ""
+
+
+def _has_staged_changes() -> bool:
+    """`git diff --cached --quiet` exits 1 when something is staged, 0 when nothing is."""
+    result = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=str(ROOT))
+    if result.returncode not in (0, 1):
+        sys.exit(f"git diff --cached --quiet failed with exit code {result.returncode}")
+    return result.returncode == 1
+
+
 def git_commit_tag_push(new_version: str, message: str, github_pat: str) -> None:
+    """Commit, tag, and push the release. Each part skips what already exists, so a
+    re-run with the same version after a failed publish does not fail."""
     step("2/4  Git commit, tag, and push")
+    tag = f"v{new_version}"
 
     # The tree was clean at preflight and the release only owns these files.
     # Staging everything could accidentally commit an unrelated file created
     # by an editor or background process after that check.
     run(["git", "add", "--", "package.json", "package-lock.json", *SITE_VERSION_FILES])
-    run(["git", "commit", "-m", message])
+    if _has_staged_changes():
+        run(["git", "commit", "-m", message])
+    else:
+        print("  Nothing staged: the version bump is already committed; skipping commit.")
 
-    tag = f"v{new_version}"
-    run(["git", "tag", tag])
+    head = run(["git", "rev-parse", "HEAD"])
+    if run(["git", "tag", "--list", tag]):
+        tagged = run(["git", "rev-list", "-n", "1", tag])
+        if tagged != head:
+            sys.exit(
+                f"Tag {tag} already exists at {tagged[:12]}, not at HEAD ({head[:12]}). "
+                "Refusing to move a release tag. If it is a leftover from a failed run, "
+                f"delete it on purpose (git tag -d {tag}; git push origin :refs/tags/{tag}) and re-run."
+            )
+        print(f"  Tag {tag} already exists at HEAD; skipping tag.")
+    else:
+        run(["git", "tag", tag])
 
-    # Pass the PAT to this one git process through an ephemeral config
-    # environment. It never appears in argv or .git/config, so an interruption
-    # cannot leave a credential embedded in the repository's remote URL.
-    basic_auth = base64.b64encode(
-        f"x-access-token:{github_pat}".encode("utf-8")
-    ).decode("ascii")
-    git_auth_env = {
-        "GIT_CONFIG_COUNT": "1",
-        "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
-        "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {basic_auth}",
-    }
+    remote_main = _remote_ref_sha("refs/heads/main", github_pat)
+    remote_tag = _remote_ref_sha(f"refs/tags/{tag}", github_pat)
+    if remote_tag and remote_tag != head:
+        sys.exit(
+            f"origin already has tag {tag} at {remote_tag[:12]}, not at HEAD ({head[:12]}). "
+            "Refusing to push over it."
+        )
+    refspecs = []
+    if remote_main != head:
+        refspecs.append("main")
+    if not remote_tag:
+        refspecs.append(tag)
+    if not refspecs:
+        print(f"  origin already has main and {tag} at HEAD; nothing to push.")
+        return
+
     run(
-        ["git", "push", "--atomic", "origin", "main", tag],
-        env_extra=git_auth_env,
-        display=f"git push --atomic origin main {tag}",
+        ["git", "push", "--atomic", "origin", *refspecs],
+        env_extra=_git_auth_env(github_pat),
+        display=f"git push --atomic origin {' '.join(refspecs)}",
     )
-
-    print(f"  Pushed main + tag {tag}")
+    print(f"  Pushed {' + '.join(refspecs)}")
 
 
 def create_github_release(new_version: str, release_body: str, github_pat: str) -> str:
-    step("3/4  Create GitHub release")
+    """Create the GitHub release for the tag, or reuse the one that exists.
+    Called only after npm has the version."""
+    step("4b/4  Create GitHub release")
     tag = f"v{new_version}"
+    existing = github_api(
+        "GET", f"/repos/{GITHUB_REPO}/releases/tags/{tag}", None, github_pat, allow_missing=True,
+    )
+    if existing is not None:
+        url = existing.get("html_url", "(unknown)")
+        print(f"  Release {tag} already exists: {url}; skipping.")
+        return url
     resp = github_api(
         "POST",
         f"/repos/{GITHUB_REPO}/releases",
@@ -428,9 +537,31 @@ def create_github_release(new_version: str, release_body: str, github_pat: str) 
         },
         github_pat,
     )
-    url = resp.get("html_url", "(unknown)")
+    url = resp.get("html_url", "(unknown)") if resp else "(unknown)"
     print(f"  Release created: {url}")
     return url
+
+
+def move_major_alias(new_version: str, github_pat: str) -> None:
+    """Point the moving Action tag `v<major>` (what `uses: LunarWerxs/NormWind@v4`
+    resolves to) at this release commit and push it. The Release workflow only
+    publishes on vX.Y.Z tags, so this does not trigger an npm publish."""
+    step("4c/4  Move major Action alias")
+    if "-" in new_version or "+" in new_version:
+        print("  Not a stable version: no major alias moved.")
+        return
+    alias = f"v{_major_version(new_version)}"
+    head = run(["git", "rev-parse", "HEAD"])
+    run(["git", "tag", "-f", alias, head])
+    if _remote_ref_sha(f"refs/tags/{alias}", github_pat) == head:
+        print(f"  {alias} already points at {head[:12]} on origin; nothing to push.")
+        return
+    run(
+        ["git", "push", "origin", f"refs/tags/{alias}", "--force"],
+        env_extra=_git_auth_env(github_pat),
+        display=f"git push origin refs/tags/{alias} --force",
+    )
+    print(f"  Moved {alias} to {head[:12]} and pushed it.")
 
 
 def npm_publish(new_version: str, npm_token: str) -> None:
@@ -538,26 +669,20 @@ def print_publish_recovery_instructions(new_version: str) -> None:
     tag = f"v{new_version}"
     print(
         "\n"
-        "npm publish FAILED. The git tag and GitHub release for this "
-        "version were already pushed, but the npm package was NOT "
-        "published. To recover:\n"
+        "npm publish FAILED. The version bump commit and the git tag "
+        f"{tag} were already pushed to origin/main, but the npm package was "
+        "NOT published. No GitHub release exists yet (it is created only after "
+        "npm publishes), and the major Action alias has not moved. To recover:\n"
         "\n"
-        "  1. Delete the pushed tag:\n"
-        f"       git push origin :refs/tags/{tag}\n"
-        f"       git tag -d {tag}\n"
-        "\n"
-        "  2. Delete the GitHub release (the tag deletion above does not "
-        "remove it):\n"
-        f"       https://github.com/{GITHUB_REPO}/releases  (delete the {tag} release in the UI)\n"
-        "     or via the API:\n"
-        f"       gh release delete {tag} --repo {GITHUB_REPO} --yes\n"
-        "\n"
-        "  3. Fix the npm publish issue (auth token, network, version "
+        "  1. Fix the npm publish issue (auth token, network, version "
         "conflict, etc).\n"
         "\n"
-        f"  4. Re-run: python scripts/release.py {new_version}\n"
-        "     This is safe to re-run with the same version once the tag "
-        "and release above are cleaned up.\n",
+        f"  2. Re-run: python scripts/release.py {new_version}"
+        " (add --publish-locally to publish from this machine)\n"
+        "     Re-running with the same version is safe: it skips the bump, "
+        "commit, tag and push that already exist, publishes, then creates the "
+        "GitHub release and moves the major alias.\n"
+        f"     Do not delete {tag} unless you mean to re-point it at another commit.\n",
         file=sys.stderr,
     )
 
@@ -597,14 +722,22 @@ def main() -> None:
     new_version = args.version.removeprefix("v")
 
     # Validate SemVer 2.0.0, including optional prerelease/build identifiers.
+    core_pattern = r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
     semver_pattern = (
-        r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
-        r"(?:-(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)"
-        r"(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?"
-        r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+        core_pattern
+        + r"(?:-(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)"
+        + r"(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?"
+        + r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
     )
     if not re.fullmatch(semver_pattern, new_version):
         sys.exit(f"Invalid version: {new_version!r}  (expected e.g. 3.0.4)")
+    # Prerelease (and build-suffixed) versions would publish under npm's `latest` tag and
+    # break the site version spots, so refuse them until the script handles them.
+    if not re.fullmatch(core_pattern, new_version):
+        sys.exit(
+            f"{new_version!r}: prerelease versions are not supported by this script yet "
+            "(build suffixes are rejected too). Use a plain X.Y.Z version."
+        )
 
     # Load credentials.
     env = load_env(ENV_FILE)
@@ -668,11 +801,14 @@ def main() -> None:
         raise
 
     git_commit_tag_push(new_version, commit_message, github_pat)
-    create_github_release(new_version, release_notes, github_pat)
     if args.publish_locally:
         npm_publish(new_version, npm_token)
     else:
         await_actions_publish(new_version, github_pat)
+
+    # npm now has the version. Only now make the public GitHub release and move the alias.
+    create_github_release(new_version, release_notes, github_pat)
+    move_major_alias(new_version, github_pat)
 
     print(f"\nDone. v{new_version} is live on npm and GitHub.\n")
 

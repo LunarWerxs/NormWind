@@ -81,7 +81,9 @@ addCheck("package metadata", async () => {
     assert(pkg.bin?.normwinds === "bin/normwind.mjs", "normwinds alias mapping is missing");
     assert(pkg.dependencies?.["@babel/parser"], "@babel/parser dependency is missing");
     assert(pkg.dependencies?.tailwindcss, "tailwindcss dependency is missing");
-    assert(pkg.dependencies?.["eslint-plugin-tailwindcss"], "eslint-plugin-tailwindcss dependency is missing");
+    // The shorthand group table is vendored (lib/vendor/, THIRD-PARTY-NOTICES.md);
+    // nothing imports the plugin, and its ESLint peer would ride into every install.
+    assert(!pkg.dependencies?.["eslint-plugin-tailwindcss"], "eslint-plugin-tailwindcss must not be a runtime dependency; the table it supplied is vendored");
     assert(!pkg.dependencies?.eslint, "eslint must not be a runtime dependency");
     assert(pkg.files.includes("bin/normwind.mjs"), "published files must include bin/normwind.mjs explicitly");
     assert(pkg.files.includes("lib/*.mjs"), "published files must include lib/*.mjs; bin/normwind.mjs imports from it at runtime");
@@ -109,6 +111,10 @@ addCheck("workflow and release hardening", async () => {
         `every action must be pinned to a full commit SHA: ${actionRefs.join(", ")}`,
     );
     assert(/permissions:\s*\n\s+contents:\s+read/.test(ci), "CI must explicitly use read-only contents permission");
+    const copyBudget = await fs.readFile(path.join(REPO_ROOT, ".github", "workflows", "copy-budget.yml"), "utf8");
+    assert(/^permissions:\s*\n\s+contents:\s+read/m.test(copyBudget), "copy-budget workflow must declare read-only contents permission");
+    const publishJob = releaseWorkflow.slice(releaseWorkflow.indexOf("publish:"));
+    assert(!/run:\s*npm (ci|install)/.test(publishJob), "the publish job holds id-token: write and must not install dependencies");
     assert(!releaseScript.includes("remote set-url"), "release script must not persist a PAT in the origin URL");
     assert(!releaseScript.includes('"--tags"'), "release script must not push unrelated local tags");
     assert(releaseScript.includes('"--atomic"'), "release script should push main and the release tag atomically");
@@ -161,9 +167,46 @@ addCheck("check-canonical failure path", async () => {
         };
         await fs.writeFile(jsonDest, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
 
+        // Outside a NormWind checkout the maintenance flags refuse up front
+        // (exit 2), so this must fail for that reason first...
+        const outside = await run(NODE_BIN, [NORMWIND_BIN, "--check-canonical"], { cwd: dir });
+        assert(outside.exitCode === 2, `expected exit 2 outside a checkout, got ${outside.exitCode}`);
+        assert(outside.stderr.includes("only run inside a NormWind checkout"), outside.stderr);
+
+        // ...and inside one it must fail on the drift itself, not on the gate.
+        await fs.writeFile(path.join(dir, "package.json"), `${JSON.stringify({ name: "@lunawerx/normwind" })}\n`, "utf8");
         const result = await run(NODE_BIN, [NORMWIND_BIN, "--check-canonical"], { cwd: dir });
         assert(!result.ok, "--check-canonical should fail against a corrupted docs/reference snapshot");
         assert(result.exitCode !== 0, `expected non-zero exit, got ${result.exitCode}`);
+        assert(result.stderr.includes("artifacts are out of date"), `failed for the wrong reason:\n${result.stderr}`);
+    } finally {
+        await rmrf(dir);
+    }
+});
+
+// Holds audit finding F-31: a scanned repository's own
+// docs/reference/canonical-replacements.json used to be trusted before the
+// bundled snapshot outside Action mode, so the repository chose what --fix
+// wrote. The planted file below matches the real snapshot's identity, so only
+// the lookup order decides which answer wins.
+addCheck("a scanned project's canonical snapshot is never read", async () => {
+    const dir = path.join(os.tmpdir(), `normwind-planted-snapshot-${Date.now()}`);
+    const docsDir = path.join(dir, "docs", "reference");
+    await fs.mkdir(docsDir, { recursive: true });
+    try {
+        const real = await readJson(SNAPSHOT_JSON);
+        await fs.writeFile(
+            path.join(docsDir, "canonical-replacements.json"),
+            `${JSON.stringify({
+                source: real.source,
+                replacements: [{ inputClass: "rounded-[24px]", canonicalClass: "rounded-xl", sourceClass: "rounded-xl" }],
+            })}\n`,
+            "utf8",
+        );
+        await fs.writeFile(path.join(dir, "Input.vue"), `<template><div class="rounded-[24px]"></div></template>\n`, "utf8");
+        const result = await run(NODE_BIN, [NORMWIND_BIN, "Input.vue", "--json"], { cwd: dir });
+        assert(result.stdout.includes("written as 'rounded-3xl'"), `expected the shipped answer rounded-3xl\n${result.stdout}`);
+        assert(!result.stdout.includes("written as 'rounded-xl'"), `the planted snapshot was trusted\n${result.stdout}`);
     } finally {
         await rmrf(dir);
     }
@@ -364,34 +407,105 @@ addCheck("stale cache invalidation and compaction", async () => {
     }
 });
 
-addCheck("live canonicalization candidate limit", async () => {
-    const dir = path.join(os.tmpdir(), `normwind-canonical-limit-${Date.now()}`);
-    await fs.mkdir(dir, { recursive: true });
+addCheck("live canonicalization works through more misses than one engine holds", async () => {
+    // Tailwind keeps ~0.4 MB of heap per candidate an engine has seen, so the
+    // CLI swaps in a fresh engine every LIVE_CANONICALIZATIONS_PER_ENGINE
+    // candidates instead of refusing the run (it used to exit 2 above 1000
+    // and, having saved nothing, could never warm up). 1001 forces a second
+    // engine; every answer must still land in the persisted cache.
+    const dir = path.join(os.tmpdir(), `normwind-canonical-batches-${Date.now()}`);
+    const cachePath = path.join(dir, "node_modules", ".cache", "normwinds", "canonical-cache.json");
+    await fs.mkdir(path.join(dir, "node_modules"), { recursive: true });
     const tokens = Array.from({ length: 1001 }, (_, i) => `w-[${100000 + i}.123px]`);
     await fs.writeFile(
         path.join(dir, "Many.vue"),
-        `<template><div class="${tokens.join(" ")}"></div></template>\n`,
+        `<template><div class="${tokens.join(" ")} rounded-[24px]"></div></template>\n`,
         "utf8",
     );
 
     try {
-        const result = await run(NODE_BIN, [NORMWIND_BIN, "Many.vue", "--json"], { cwd: dir });
-        assert(result.exitCode === 2, `candidate-limit breach should exit 2, got ${result.exitCode}`);
+        const result = await run(NODE_BIN, [NORMWIND_BIN, "Many.vue", "--json"], { cwd: dir, timeout: 120000 });
+        assert(result.exitCode === 1, `1001 unique misses must be canonicalized, not refused (exit ${result.exitCode})\n${result.stderr}`);
         assert(
-            result.stderr.includes("refusing to live-canonicalize 1001 unique cache misses"),
-            `candidate-limit error was not actionable:\n${result.stderr}`,
+            parseCliJson(result.stdout).findings.some((finding) => finding.message.includes("rounded-3xl")),
+            `findings after the batch were lost: ${result.stdout}`,
         );
+        const cache = await readJson(cachePath);
+        const cached = tokens.filter((token) => Object.hasOwn(cache.entries, token)).length;
+        assert(cached === tokens.length, `expected all ${tokens.length} live answers in the disk cache, got ${cached}`);
 
         const fixResult = await run(
             NODE_BIN,
             [NORMWIND_BIN, "Many.vue", "--fixall", "--dry-run", "--json"],
-            { cwd: dir },
+            { cwd: dir, timeout: 120000 },
         );
-        assert(fixResult.exitCode === 2, `fix candidate-limit breach should exit 2, got ${fixResult.exitCode}`);
+        assert(fixResult.exitCode === 1, `fix path must also work through the batch (exit ${fixResult.exitCode})\n${fixResult.stderr}`);
+    } finally {
+        await rmrf(dir);
+    }
+});
+
+addCheck("disk cache never creates node_modules and is keyed by NormWind version", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "normwind-cache-home-"));
+    const pkg = await readJson(path.join(REPO_ROOT, "package.json"));
+    try {
+        await fs.writeFile(path.join(dir, "A.vue"), `<template><div class="w-[777.5px] px-2 py-2"></div></template>\n`, "utf8");
+        const plain = await run(NODE_BIN, [NORMWIND_BIN, "--json"], { cwd: dir });
+        assert(plain.exitCode === 1, `audit failed\n${plain.stderr}`);
+        const created = await fs.stat(path.join(dir, "node_modules")).then(() => true, () => false);
+        assert(!created, "an audit created node_modules/ in a project that had none");
+
+        await fs.mkdir(path.join(dir, "node_modules"));
+        await run(NODE_BIN, [NORMWIND_BIN, "--json"], { cwd: dir });
+        const cachePath = path.join(dir, "node_modules", ".cache", "normwinds", "canonical-cache.json");
+        const cache = await readJson(cachePath);
+        assert(cache.normwindVersion === pkg.version, `cache is not keyed by the NormWind version: ${JSON.stringify(cache).slice(0, 200)}`);
+
+        // A verdict written by another NormWind version must not be trusted.
+        cache.normwindVersion = "0.0.0-other";
+        cache.entries["w-[777.5px]"] = "w-full";
+        await fs.writeFile(cachePath, JSON.stringify(cache), "utf8");
+        const stale = await run(NODE_BIN, [NORMWIND_BIN, "--json"], { cwd: dir });
         assert(
-            fixResult.stderr.includes("unique cache misses during fixes"),
-            `fix path did not enforce the candidate limit:\n${fixResult.stderr}`,
+            !parseCliJson(stale.stdout).findings.some((finding) => finding.message.includes("w-full")),
+            `a cache entry from another NormWind version leaked into findings: ${stale.stdout}`,
         );
+    } finally {
+        await rmrf(dir);
+    }
+});
+
+addCheck("--theme-css judges canonicalization and refuses non-v4 Tailwind", async () => {
+    // A project that redefines a default theme key: rounded-lg is 10px here,
+    // so rounded-[8px] must NOT become rounded-lg once the theme is given.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "normwind-theme-canon-"));
+    try {
+        await fs.writeFile(path.join(dir, "theme.css"), `@theme {\n  --radius-lg: 10px;\n}\n`, "utf8");
+        await fs.writeFile(path.join(dir, "A.vue"), `<template><div class="rounded-[8px]"></div></template>\n`, "utf8");
+        const defaultTheme = await run(NODE_BIN, [NORMWIND_BIN, "A.vue", "--json"], { cwd: dir });
+        assert(
+            parseCliJson(defaultTheme.stdout).findings.some((finding) => finding.message.includes("'rounded-lg'")),
+            `default theme should map rounded-[8px] to rounded-lg: ${defaultTheme.stdout}`,
+        );
+        const projectTheme = await run(NODE_BIN, [NORMWIND_BIN, "A.vue", "--theme-css", "theme.css", "--json"], { cwd: dir });
+        assert(
+            !parseCliJson(projectTheme.stdout).findings.some((finding) => finding.message.includes("'rounded-lg'")),
+            `--theme-css with --radius-lg: 10px must not suggest rounded-lg for 8px: ${projectTheme.stdout}`,
+        );
+
+        // A project pinned to Tailwind v3 is refused, not judged by v4 rules.
+        const v3 = path.join(dir, "node_modules", "tailwindcss");
+        await fs.mkdir(v3, { recursive: true });
+        await fs.writeFile(path.join(dir, "package.json"), `{"name":"v3-project","private":true}\n`, "utf8");
+        await fs.writeFile(path.join(v3, "package.json"), `{"name":"tailwindcss","version":"3.4.17","main":"index.js"}\n`, "utf8");
+        await fs.writeFile(path.join(v3, "index.js"), "module.exports = {};\n", "utf8");
+        await fs.writeFile(path.join(dir, "B.vue"), `<template><div class="!mt-0 px-2 py-2"></div></template>\n`, "utf8");
+        const before = await fs.readFile(path.join(dir, "B.vue"), "utf8");
+        const refused = await run(NODE_BIN, [NORMWIND_BIN, "B.vue", "--fix"], { cwd: dir });
+        assert(refused.exitCode === 2, `a Tailwind v3 project must exit 2, got ${refused.exitCode}\n${refused.stdout}\n${refused.stderr}`);
+        assert(refused.stderr.includes("supports Tailwind CSS v4 only"), `v3 refusal should say why:\n${refused.stderr}`);
+        assert(!refused.stderr.includes("    at "), `an expected refusal must not print a stack trace:\n${refused.stderr}`);
+        assert((await fs.readFile(path.join(dir, "B.vue"), "utf8")) === before, "--fix rewrote a v3 project");
     } finally {
         await rmrf(dir);
     }
@@ -437,7 +551,7 @@ addCheck("fixall fault isolation: write failure", async () => {
     try {
         const result = await run(NODE_BIN, [NORMWIND_BIN, "--fixall"], {
             cwd: dir,
-            env: { NORMWIND_TEST_FORCE_WRITE_FAIL: "Locked.vue" },
+            env: { NORMWIND_TEST_HOOKS: "1", NORMWIND_TEST_FORCE_WRITE_FAIL: "Locked.vue" },
         });
         assert(result.exitCode === 2, `partial-failure run should exit 2, got ${result.exitCode}\n${result.stdout}\n${result.stderr}`);
         assert(/fix summary.*1 fixed, 0 skipped, 1 failed/.test(result.stderr), `expected a fixed/skipped/failed summary in stderr, got:\n${result.stderr}`);
@@ -470,7 +584,7 @@ addCheck("fixall fault isolation: transform throw", async () => {
     try {
         const result = await run(NODE_BIN, [NORMWIND_BIN, "--fixall"], {
             cwd: dir,
-            env: { NORMWIND_TEST_FORCE_TRANSFORM_THROW: "Throws.vue" },
+            env: { NORMWIND_TEST_HOOKS: "1", NORMWIND_TEST_FORCE_TRANSFORM_THROW: "Throws.vue" },
         });
         assert(result.exitCode === 2, `partial-failure run should exit 2, got ${result.exitCode}\n${result.stdout}\n${result.stderr}`);
         assert(/fix summary.*1 fixed, 0 skipped, 1 failed/.test(result.stderr), `expected a fixed/skipped/failed summary in stderr, got:\n${result.stderr}`);
@@ -498,7 +612,7 @@ addCheck("fixall detects concurrent edits", async () => {
     try {
         const result = await run(NODE_BIN, [NORMWIND_BIN, "--fixall"], {
             cwd: dir,
-            env: { NORMWIND_TEST_MUTATE_BEFORE_RENAME: "Race.vue" },
+            env: { NORMWIND_TEST_HOOKS: "1", NORMWIND_TEST_MUTATE_BEFORE_RENAME: "Race.vue" },
         });
         assert(result.exitCode === 2, `concurrent edit should make the run partial, got ${result.exitCode}`);
         assert(result.stderr.includes("file changed while fixes were being prepared"), result.stderr);
@@ -611,47 +725,50 @@ addCheck("version flag", async () => {
     assert(bogus.exitCode === 2, `expected exit 2 for an unknown flag, got ${bogus.exitCode}`);
 });
 
-addCheck("ripgrep-fallback parity", async () => {
-    // The CLI prefers `rg --files` for discovery and falls back to a manual
-    // directory walk when `rg` cannot be spawned (ENOENT). Both paths must
-    // discover and audit the identical file set; this pins that contract by
-    // running the same fixable corpus twice, once with a PATH that excludes
-    // ripgrep entirely.
-    const dir = path.join(os.tmpdir(), `normwind-rg-parity-${Date.now()}`);
-    await fs.mkdir(path.join(dir, "nested"), { recursive: true });
-    await fs.writeFile(
-        path.join(dir, "One.vue"),
-        `<template>\n  <div class="px-2 py-2">One</div>\n</template>\n`,
-        "utf8",
-    );
-    await fs.writeFile(
-        path.join(dir, "nested", "Two.vue"),
-        `<template>\n  <div class="mt-3 mb-3">Two</div>\n</template>\n`,
-        "utf8",
-    );
-
+addCheck("discovery: explicit paths are literal and never widen the scan", async () => {
+    // One discovery engine (the walker) on every machine. Pins four contracts
+    // the old ripgrep/walker pair broke:
+    //  - an explicit file that is ignored or of an unsupported type matches
+    //    nothing (exit 2) instead of widening to the whole project, so
+    //    `--fix dist/X.vue` cannot rewrite src/;
+    //  - an existing path with [brackets] (a dynamic route) is the file it
+    //    names, not a glob;
+    //  - wildcards inside {a,b} alternatives work;
+    //  - a bare --ignore name matches at any depth, like .gitignore.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "normwind-discovery-"));
+    const vue = `<template>\n  <div class="px-2 py-2">x</div>\n</template>\n`;
+    const tsx = `export const a = <div className="mt-2 mb-2" />;\n`;
     try {
-        const normal = await run(NODE_BIN, [NORMWIND_BIN, "--json"], { cwd: dir });
-        assert(normal.exitCode === 1, `normal-PATH audit should exit 1, got ${normal.exitCode}\n${normal.stderr}`);
-        const normalPayload = parseCliJson(normal.stdout);
+        for (const folder of ["src", "dist", "app/[slug]", "pkg/generated"]) {
+            await fs.mkdir(path.join(dir, folder), { recursive: true });
+        }
+        await fs.writeFile(path.join(dir, "src", "A.vue"), vue, "utf8");
+        await fs.writeFile(path.join(dir, "dist", "App.vue"), vue, "utf8");
+        await fs.writeFile(path.join(dir, "pkg", "generated", "G.vue"), vue, "utf8");
+        await fs.writeFile(path.join(dir, "styles.css"), ".x{}\n", "utf8");
+        await fs.writeFile(path.join(dir, "app", "[slug]", "page.tsx"), tsx, "utf8");
+        await fs.writeFile(path.join(dir, "src", "a.test.tsx"), tsx, "utf8");
+        await fs.writeFile(path.join(dir, "src", "a.spec.tsx"), tsx, "utf8");
 
-        const nodeDir = path.dirname(NODE_BIN);
-        const noRg = await run(NODE_BIN, [NORMWIND_BIN, "--json"], {
-            cwd: dir,
-            env: { PATH: nodeDir, Path: nodeDir },
-        });
-        assert(noRg.exitCode === 1, `no-rg-PATH audit should exit 1, got ${noRg.exitCode}\n${noRg.stderr}`);
-        const noRgPayload = parseCliJson(noRg.stdout);
+        for (const args of [["--fix", "dist/App.vue"], ["--fixall", "styles.css"]]) {
+            const result = await run(NODE_BIN, [NORMWIND_BIN, ...args], { cwd: dir });
+            assert(result.exitCode === 2, `${args.join(" ")} must exit 2 (nothing lintable), got ${result.exitCode}\n${result.stderr}`);
+            assert(result.stderr.includes("Not scanned"), `${args.join(" ")} should name the refused file:\n${result.stderr}`);
+            const untouched = await fs.readFile(path.join(dir, "src", "A.vue"), "utf8");
+            assert(untouched === vue, `${args.join(" ")} rewrote src/A.vue, which it never named: ${untouched}`);
+        }
 
-        assert(noRgPayload.lintedFiles === normalPayload.lintedFiles, `lintedFiles diverged: rg=${normalPayload.lintedFiles} walk=${noRgPayload.lintedFiles}`);
-        const normalizeFindings = (payload) =>
-            (payload.findings ?? [])
-                .map((f) => `${f.filePath}:${f.line}:${f.column}:${f.message}`)
-                .sort();
-        assert(
-            JSON.stringify(normalizeFindings(normalPayload)) === JSON.stringify(normalizeFindings(noRgPayload)),
-            `findings diverged between rg and walk fallback\nrg: ${JSON.stringify(normalPayload.findings)}\nwalk: ${JSON.stringify(noRgPayload.findings)}`,
-        );
+        const bracket = await run(NODE_BIN, [NORMWIND_BIN, "app/[slug]/page.tsx", "--json"], { cwd: dir });
+        const bracketPayload = parseCliJson(bracket.stdout);
+        assert(bracketPayload.lintedFiles === 1, `a bracketed path must be scanned as the file it names: ${bracket.stdout}\n${bracket.stderr}`);
+
+        const braces = await run(NODE_BIN, [NORMWIND_BIN, "src/{*.test,*.spec}.tsx", "--json"], { cwd: dir });
+        assert(parseCliJson(braces.stdout).lintedFiles === 2, `wildcards inside braces must match: ${braces.stdout}`);
+
+        const ignored = await run(NODE_BIN, [NORMWIND_BIN, "--ignore", "generated", "--json"], { cwd: dir });
+        const ignoredPaths = parseCliJson(ignored.stdout).findings.map((finding) => finding.filePath);
+        assert(!ignoredPaths.some((filePath) => filePath.includes("generated/")), `a bare --ignore name must match at any depth: ${JSON.stringify(ignoredPaths)}`);
+        assert(ignoredPaths.includes("src/A.vue"), `--ignore generated dropped unrelated files: ${JSON.stringify(ignoredPaths)}`);
     } finally {
         await rmrf(dir);
     }
@@ -688,13 +805,11 @@ addCheck("directory and glob targets are unioned", async () => {
     }
 });
 
-addCheck("fallback walker: symlink loop guard", async () => {
+addCheck("discovery walker: symlink loop guard", async () => {
     // Two directories symlinked into each other (A/link -> B, B/link -> A)
-    // would recurse forever without a visited-realpath guard. This forces the
-    // no-rg fallback walker (ripgrep has its own loop protection and would
-    // mask a regression here) and bounds the run with a hard timeout so a
-    // reintroduced infinite loop fails this check instead of hanging the
-    // whole suite.
+    // would recurse forever without a visited-realpath guard. The run is
+    // bounded with a hard timeout so a reintroduced infinite loop fails this
+    // check instead of hanging the whole suite.
     const dir = path.join(os.tmpdir(), `normwind-symlink-loop-${Date.now()}`);
     await fs.mkdir(path.join(dir, "dirA"), { recursive: true });
     await fs.mkdir(path.join(dir, "dirB"), { recursive: true });

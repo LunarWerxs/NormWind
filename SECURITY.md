@@ -14,6 +14,6 @@ You can expect an acknowledgement within five business days. No vulnerability di
 
 ## Action permissions and data handling
 
-The Marketplace Action requires only repository contents read access supplied by `actions/checkout`. It does not request a GitHub token, call a NormWind service, or send source code or findings off the runner. Version 3.x audits only and does not modify the checked-out repository.
+The Marketplace Action requires only repository contents read access supplied by `actions/checkout`. It does not request a GitHub token, call a NormWind service, or send source code or findings off the runner. Version 4.x audits only and does not modify the checked-out repository.
 
 Action mode treats checked-out files as hostile input. It uses only its bundled parser, Tailwind runtime, and canonical snapshot; disables external repository tools and disk caching; removes GitHub tokens and arbitrary secrets from the scanner environment; confines source and theme-import reads to the workspace; rejects directory symlinks; and enforces file, byte, output-buffer, and execution-time limits.

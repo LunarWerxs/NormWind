@@ -7,6 +7,7 @@ import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { partitionFindingsByChangedLines, readChangedLines } from "../lib/changed-lines.mjs";
+import { buildSarifReport } from "../lib/sarif.mjs";
 
 const execFileAsync = promisify(execFile);
 const ACTION_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -141,46 +142,23 @@ function resolveSarifTarget(sarifFile, { workspace, workingDirectory }) {
     return candidate;
 }
 
-function buildSarifFromPayload(payload) {
-    return {
-        $schema: "https://json.schemastore.org/sarif-2.1.0.json",
-        version: "2.1.0",
-        runs: [
-            {
-                tool: {
-                    driver: {
-                        name: "NormWind",
-                        version: payload.version,
-                        informationUri: "https://github.com/LunarWerxs/NormWind",
-                        rules: [
-                            {
-                                id: "tailwindcss/enforces-shorthand",
-                                name: "EnforcesShorthand",
-                                shortDescription: { text: "Tailwind classes can be normalized" },
-                                defaultConfiguration: { level: "warning" },
-                            },
-                        ],
-                    },
-                },
-                results: payload.findings.map((finding) => ({
-                    ruleId: "tailwindcss/enforces-shorthand",
-                    level: "warning",
-                    message: { text: String(finding?.message ?? "") },
-                    locations: [
-                        {
-                            physicalLocation: {
-                                artifactLocation: { uri: String(finding?.filePath ?? "") },
-                                region: {
-                                    startLine: Number.isInteger(finding?.line) && finding.line > 0 ? finding.line : 1,
-                                    startColumn: Number.isInteger(finding?.column) && finding.column > 0 ? finding.column : 1,
-                                },
-                            },
-                        },
-                    ],
-                })),
-            },
-        ],
-    };
+// One SARIF builder for the CLI and the Action (lib/sarif.mjs). Code scanning
+// resolves every uri from the REPOSITORY root, so the Action feeds it the
+// normalised findings, whose paths are workspace-relative, never the CLI's,
+// which are relative to working-directory.
+const RULE_ID = "tailwindcss/enforces-shorthand";
+
+function buildSarifFromFindings(payload, findings) {
+    return buildSarifReport(
+        findings.map((finding) => ({
+            filePath: finding.file,
+            line: finding.line,
+            column: finding.column,
+            message: finding.message,
+        })),
+        payload.lintedFiles,
+        { version: payload.version, ruleId: typeof payload.ruleId === "string" ? payload.ruleId : RULE_ID },
+    );
 }
 
 // changed-lines-only needs a base to diff against. On a pull_request event
@@ -281,7 +259,6 @@ export function scannerEnvironment(workspace) {
         NORMWIND_ACTION_WORKSPACE: workspace,
         NORMWIND_BUNDLED_TAILWIND_CSS: BUNDLED_TAILWIND_CSS,
         NORMWIND_DISABLE_DISK_CACHE: "1",
-        NORMWIND_DISABLE_RIPGREP: "1",
         NORMWIND_FORCE_BUNDLED_RUNTIME: "1",
     };
     const preservedKeys = new Set([
@@ -313,6 +290,16 @@ async function executeCli(args, workingDirectory, workspace) {
         });
         return { exitCode: 0, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
     } catch (error) {
+        if (error?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+            throw new Error(
+                `NormWind's report exceeded the Action's ${MAX_BUFFER_BYTES / (1024 * 1024)} MB output limit. Narrow the scan with the patterns or ignore inputs.`,
+            );
+        }
+        if (error?.killed || (error?.signal && typeof error?.code !== "number")) {
+            throw new Error(
+                `NormWind did not finish within the Action's ${ACTION_TIMEOUT_MS / 60_000}-minute limit and was stopped (${error.signal ?? "timeout"}). Narrow the scan with the patterns or ignore inputs.`,
+            );
+        }
         if (typeof error?.code === "number") {
             return {
                 exitCode: error.code,
@@ -440,6 +427,7 @@ export async function runAction() {
         const suggestNamedThemeVars = parseBooleanInput("suggest-named-theme-vars", false);
         const maxAnnotations = parseIntegerInput("max-annotations", 10, { min: 0, max: 50 });
         const changedLinesOnly = parseBooleanInput("changed-lines-only", false);
+        const allowEmpty = parseBooleanInput("allow-empty", false);
         const diffBase = changedLinesOnly ? resolveDiffBase() : "";
         const themeCss = await resolveThemeCss(core.getInput("theme-css").trim(), {
             workspace,
@@ -473,6 +461,9 @@ export async function runAction() {
         if (baseline) {
             args.push("--baseline", baseline);
         }
+        if (allowEmpty) {
+            args.push("--allow-empty");
+        }
 
         core.info(`Running NormWind in ${workingDirectory}`);
         const execution = await executeCli(args, workingDirectory, workspace);
@@ -502,7 +493,7 @@ export async function runAction() {
 
         if (sarifFile) {
             await fs.mkdir(path.dirname(sarifFile), { recursive: true });
-            await fs.writeFile(sarifFile, `${JSON.stringify(buildSarifFromPayload(payload), null, 2)}\n`, "utf8");
+            await fs.writeFile(sarifFile, `${JSON.stringify(buildSarifFromFindings(payload, findings), null, 2)}\n`, "utf8");
             core.setOutput("sarif-path", sarifFile);
         }
 
