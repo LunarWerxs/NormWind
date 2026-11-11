@@ -144,6 +144,14 @@ addCheck("canonical snapshot integrity", async () => {
 
 // The drift check itself is `npm run canonical:check`, which `npm test` runs before this script.
 
+// The copy-budget workflow only runs on GitHub, so a docs/index.html edit
+// that grew the landing page used to pass `npm test` and fail after the push
+// (bb836c9, 2026-11-11). Run the same script here so it fails before landing.
+addCheck("landing page stays within its copy budget", async () => {
+    const result = await run(NODE_BIN, [path.join(REPO_ROOT, "scripts", "copy-budget.mjs")]);
+    assert(result.ok, `copy-budget failed\n${result.stdout}\n${result.stderr}`);
+});
+
 addCheck("check-canonical failure path", async () => {
     // --check-canonical compares against <cwd>/docs/reference/*, so this
     // proves the negative: a deliberately corrupted snapshot must fail the
