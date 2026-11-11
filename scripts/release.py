@@ -10,9 +10,11 @@ Example:
     python scripts/release.py 3.1.0 --message "feat: add new canonical rules"
 
 What it does:
-    0. Pre-flight (no mutation): runs the complete npm test gate and validates
-       git state (on main, clean tree, HEAD == origin/main so CI has run on
-       the commit being released) and GitHub credentials.
+    0. Pre-flight (no mutation): validates git state (on main, clean tree,
+       HEAD == origin/main) and GitHub credentials, then requires the CI
+       workflow to have finished green on that exact commit (every OS and
+       Node line CI covers). Pass --local-tests to run the full npm test
+       suite on this machine instead.
     1. Bumps the version in package.json, syncs package-lock.json and the
        version the site states (docs/index.html, docs/llms-full.txt), then
        runs `npm publish --dry-run` at the new version to catch npm
@@ -352,6 +354,41 @@ def run_test_gate() -> None:
             "been modified."
         )
     print("  Test suite passed.")
+
+
+CI_WORKFLOW_NAME = "CI"
+
+
+def assert_ci_passed(github_pat: str) -> None:
+    """Refuse unless the CI workflow finished green on the exact commit being released.
+
+    CI runs the whole `npm test` on every supported OS and Node line, so its
+    green run on HEAD is a stronger gate than one local run, and the tag's own
+    Release workflow runs `npm test` again before it publishes. Pass
+    --local-tests to run the suite on this machine instead.
+    """
+    step("0d/4  Require a green CI run on this commit")
+    head = run(["git", "rev-parse", "HEAD"])
+    runs = github_api(
+        "GET",
+        f"/repos/{GITHUB_REPO}/actions/runs?head_sha={head}&event=push&per_page=50",
+        None,
+        github_pat,
+    )
+    ci_runs = [r for r in (runs or {}).get("workflow_runs", []) if r.get("name") == CI_WORKFLOW_NAME]
+    if not ci_runs:
+        sys.exit(
+            f"No {CI_WORKFLOW_NAME} run exists for {head[:7]}. Push it and let CI finish, "
+            "or pass --local-tests to run the suite here."
+        )
+    latest = max(ci_runs, key=lambda r: r.get("run_number", 0))
+    if latest.get("status") != "completed" or latest.get("conclusion") != "success":
+        sys.exit(
+            f"{CI_WORKFLOW_NAME} run {latest.get('html_url')} on {head[:7]} is "
+            f"{latest.get('status')}/{latest.get('conclusion')}, not completed/success. "
+            "Wait for it to pass (or fix it), then re-run this script."
+        )
+    print(f"  {CI_WORKFLOW_NAME} passed on {head[:7]}: {latest.get('html_url')}")
 
 
 def assert_git_state() -> None:
@@ -767,6 +804,12 @@ def main() -> None:
         help="Publish to npm from this machine (requires NODE_AUTH_TOKEN in .env) "
         "instead of waiting for the tag-triggered GitHub Actions publish.",
     )
+    parser.add_argument(
+        "--local-tests",
+        action="store_true",
+        help="Run the full npm test suite on this machine as the gate, instead of "
+        "requiring a green CI run on the commit being released.",
+    )
     args = parser.parse_args()
 
     new_version = args.version.removeprefix("v")
@@ -834,9 +877,12 @@ def main() -> None:
     # it at the old (already-published) version always fails. The bump is
     # local-only at that point; on dry-run failure it is restored so the
     # tree is left clean and nothing was pushed or published.
-    run_test_gate()
+    if args.local_tests:
+        run_test_gate()
     assert_git_state()
     assert_github_credentials(github_pat)
+    if not args.local_tests:
+        assert_ci_passed(github_pat)
 
     try:
         bump_version(new_version)
