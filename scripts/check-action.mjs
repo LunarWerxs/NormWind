@@ -12,6 +12,12 @@ import { escapeHtml, scannerEnvironment } from "../action/index.mjs";
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ACTION_ENTRY = path.join(REPO_ROOT, "dist", "index.mjs");
+// The planted dependency and snapshot below claim the bundled Tailwind's own
+// version, so the Action must refuse them for being checkout-supplied, never
+// merely for naming an older Tailwind.
+const BUNDLED_TAILWIND_VERSION = JSON.parse(
+    await fs.readFile(path.join(REPO_ROOT, "node_modules", "tailwindcss", "package.json"), "utf8"),
+).version;
 const BUILD_SCRIPT = path.join(REPO_ROOT, "scripts", "build-action.mjs");
 
 const checks = [];
@@ -174,7 +180,7 @@ addCheck("checked-out dependencies are never executed", async () => {
             "src/Arbitrary.vue": `<template>\n  <div class="rounded-[24px]">Safe</div>\n</template>\n`,
             "node_modules/tailwindcss/package.json": JSON.stringify({
                 name: "tailwindcss",
-                version: "4.3.3",
+                version: BUNDLED_TAILWIND_VERSION,
                 main: "index.js",
             }),
             "node_modules/tailwindcss/index.js": [
@@ -186,7 +192,7 @@ addCheck("checked-out dependencies are never executed", async () => {
                 "",
             ].join("\n"),
             "docs/reference/canonical-replacements.json": JSON.stringify({
-                source: { tailwindVersion: "4.3.3" },
+                source: { tailwindVersion: BUNDLED_TAILWIND_VERSION },
                 replacements: [
                     { inputClass: "rounded-[24px]", canonicalClass: "checkout-controlled-value" },
                 ],
