@@ -638,17 +638,19 @@ def move_major_alias(new_version: str, github_pat: str) -> None:
         print("  Not a stable version: no major alias moved.")
         return
     alias = f"v{_major_version(new_version)}"
-    head = run(["git", "rev-parse", "HEAD"])
-    run(["git", "tag", "-f", alias, head])
-    if _remote_ref_sha(f"refs/tags/{alias}", github_pat) == head:
-        print(f"  {alias} already points at {head[:12]} on origin; nothing to push.")
+    # The release tag's commit, not HEAD: a finishing re-run can happen after main
+    # has moved on, and the alias must never carry unreleased work.
+    target = run(["git", "rev-list", "-n", "1", f"v{new_version}"])
+    run(["git", "tag", "-f", alias, target])
+    if _remote_ref_sha(f"refs/tags/{alias}", github_pat) == target:
+        print(f"  {alias} already points at {target[:12]} on origin; nothing to push.")
         return
     run(
         ["git", "push", "origin", f"refs/tags/{alias}", "--force"],
         env_extra=_git_auth_env(github_pat),
         display=f"git push origin refs/tags/{alias} --force",
     )
-    print(f"  Moved {alias} to {head[:12]} and pushed it.")
+    print(f"  Moved {alias} to {target[:12]} and pushed it.")
 
 
 def npm_publish(new_version: str, npm_token: str) -> None:
@@ -675,6 +677,20 @@ def npm_publish(new_version: str, npm_token: str) -> None:
     for tgz in ROOT.glob("*.tgz"):
         tgz.unlink()
         print(f"  Removed leftover tarball: {tgz.name}")
+
+
+def npm_has_version(new_version: str) -> bool:
+    """True when the registry already lists this version; False on a miss or a network error."""
+    req = urllib.request.Request(
+        "https://registry.npmjs.org/@lunawerx%2fnormwind",
+        headers={"Accept": "application/vnd.npm.install-v1+json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            packument = json.loads(resp.read())
+    except urllib.error.URLError:
+        return False
+    return new_version in (packument.get("versions") or {})
 
 
 def await_actions_publish(new_version: str, github_pat: str) -> None:
@@ -732,18 +748,9 @@ def await_actions_publish(new_version: str, github_pat: str) -> None:
     # Confirm registry visibility (propagation is usually seconds).
     registry_deadline = time.time() + 120
     while time.time() < registry_deadline:
-        req = urllib.request.Request(
-            "https://registry.npmjs.org/@lunawerx%2fnormwind",
-            headers={"Accept": "application/vnd.npm.install-v1+json"},
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                packument = json.loads(resp.read())
-            if new_version in (packument.get("versions") or {}):
-                print(f"  Verified: @lunawerx/normwind@{new_version} is live on npm.")
-                return
-        except urllib.error.URLError:
-            pass
+        if npm_has_version(new_version):
+            print(f"  Verified: @lunawerx/normwind@{new_version} is live on npm.")
+            return
         time.sleep(5)
 
     sys.exit(
@@ -883,6 +890,22 @@ def main() -> None:
     assert_github_credentials(github_pat)
     if not args.local_tests:
         assert_ci_passed(github_pat)
+
+    # A finishing re-run: the publish already happened (the Release workflow was
+    # re-run, or a step after it failed). The dry run would now refuse the
+    # published version, so go straight to the GitHub release and the alias, but
+    # only when origin's release tag is the one npm was published from.
+    if npm_has_version(new_version):
+        if not _remote_ref_sha(f"refs/tags/v{new_version}", github_pat):
+            sys.exit(
+                f"@lunawerx/normwind@{new_version} is already on npm but origin has no tag "
+                f"v{new_version}; refusing to guess which commit it was published from."
+            )
+        print(f"  {new_version} is already live on npm: finishing the GitHub release and alias.")
+        create_github_release(new_version, release_notes, github_pat)
+        move_major_alias(new_version, github_pat)
+        print(f"\nDone. v{new_version} is live on npm and GitHub.\n")
+        return
 
     try:
         bump_version(new_version)
