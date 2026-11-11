@@ -63,23 +63,6 @@ test("a bare word is not", () => {
     assert.ok(!isLikelyTailwindUtility(parseClassToken("hello")));
 });
 
-// Tailwind 4.3.4+ rewrites arbitrary breakpoint and container variants to named
-// ones (`max-[64rem]:flex` -> `max-lg:flex`), and the commonest shape puts them
-// on a one-word utility. Both parsers must take it, or the audit and --fix miss it.
-test("a one-word utility with an arbitrary variant is a utility", () => {
-    for (const raw of ["max-[64rem]:flex", "@max-[32rem]:hidden", "[&_p]:block", "md:max-[64rem]:grid"]) {
-        assert.ok(isLikelyTailwindUtility(parseClassToken(raw)), raw);
-        assert.ok(isLikelyFixUtility(raw), raw);
-    }
-});
-
-test("a one-word utility with only named variants is still not", () => {
-    for (const raw of ["md:flex", "hover:hidden", "dark:hello"]) {
-        assert.ok(!isLikelyTailwindUtility(parseClassToken(raw)), raw);
-        assert.ok(!isLikelyFixUtility(raw), raw);
-    }
-});
-
 test("matchUtilityToBody splits compound, negative and bare utilities", () => {
     assert.deepStrictEqual(matchUtilityToBody("px-4", "px"), { negative: "", value: "4" });
     assert.deepStrictEqual(matchUtilityToBody("-mt-4", "mt"), { negative: "-", value: "4" });

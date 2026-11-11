@@ -134,8 +134,6 @@ It also catches arbitrary values that Tailwind's own design system can express a
 | `p-[1rem]`       | `p-4`         |
 | `m-[8px]`        | `m-2`         |
 
-On Tailwind 4.3.4 and later it also names arbitrary breakpoint and container-query variants: `max-[64rem]:flex` becomes `max-lg:flex` and `@min-[48rem]:grid` becomes `@3xl:grid`. A variant with no named match, such as `max-[63rem]:`, is left alone.
-
 ### 🔒 Why you can trust the rewrites
 
 NormWind doesn't invent mappings:
@@ -609,27 +607,6 @@ As of `eslint-plugin-tailwindcss` 4.x, that group table lives in NormWind's own 
 ## 📜 Changelog
 
 <details>
-<summary><strong>v4.1.1</strong>: 2026-11-11 · Tailwind 4.3.5, one wrong rewrite fixed, named breakpoints</summary>
-
-<br/>
-
-**TL;DR**
-
-- **One wrong fix is gone**: `[&_::before]:p-4` was rewritten to `**:[::before]:p-4`, whose CSS selector browsers ignore, so the style was lost. It now becomes `**:[&::before]:p-4`.
-- **Named breakpoints and container sizes**: `max-[64rem]:flex` is now reported and fixed as `max-lg:flex`, and `@min-[48rem]:grid` as `@3xl:grid`. Expect a few new findings if your code uses arbitrary breakpoints.
-
-**Everything in 4.1.1**
-
-- **Bundled Tailwind is 4.3.5** (was 4.3.3). It is the Tailwind the GitHub Action always uses, and the CLI's when the scanned project has no Tailwind of its own. A project with its own Tailwind gets the changes below once that Tailwind is 4.3.4 or later.
-- **Fixed: a pseudo-element rewrite dropped `&`**: `[&_::before]:p-4` became `**:[::before]:p-4`, which compiles to `:is(::before)`, a selector browsers drop, so the padding vanished. It now becomes `**:[&::before]:p-4`, which compiles to the same `::before` rule as the original.
-- **Arbitrary breakpoint and container-query variants get their named form**: `max-[64rem]:p-4` becomes `max-lg:p-4`, `@max-[32rem]:hidden` becomes `@max-lg:hidden`. A variant with no named match, such as `max-[63rem]:`, is left alone.
-- **One-word classes with an arbitrary variant are scanned**: `max-[64rem]:flex` and `[&_p]:hidden` were skipped because the class itself is one word. They are now audited and fixed like any other class.
-- **No suggestion for a modifier Tailwind ignores**: `rounded-sm/[5]` was suggested as `rounded-sm`. Tailwind 4.3.4 and later generate no CSS for such a class at all, so dropping the modifier would change the page, and NormWind no longer suggests it.
-- **`@babel/parser` 8.1.0**, which reads JavaScript and TypeScript files (was 8.0.7).
-
-</details>
-
-<details>
 <summary><strong>v4.1.0</strong>: 2026-11-11 · theme-aware canonicalization, uncapped live canonicalization, stricter file matching and fixing</summary>
 
 <br/>
@@ -915,7 +892,7 @@ No. NormWind runs entirely against your local files and your project's installed
 NormWind requires Node.js `^22.18.0` or `>=24.11.0`, per its `package.json` engines field (Node 22.0-22.17 and 24.0-24.10 fall in the gap). Node 20 was dropped on 2026-09-10, after it reached end-of-life on 2026-04-30 and stopped receiving security patches; the floor narrowed further on 2026-09-14 to match `@babel/parser` 8's own declared engines range. It works against Tailwind CSS v4 projects: full shorthand and arbitrary-value canonicalization on Tailwind 4.1 through 4.3, and shorthand-only auditing on 4.0, since that release doesn't expose the canonicalization API NormWind depends on for arbitrary values.
 
 **Does it support Tailwind CSS v3?**
-The repo documents support for Tailwind CSS v4 only, spanning 4.0 through the bundled 4.3.5. Arbitrary-value canonicalization relies on Tailwind's `designSystem.canonicalizeCandidates` engine, a v4 API. No v3 compatibility is documented in the README or changelog, so treat NormWind as a v4-only tool unless a future release states otherwise. If the scanned project's own installed `tailwindcss` is not v4, NormWind exits `2` with a one-line message and does not audit or rewrite it.
+The repo documents support for Tailwind CSS v4 only, spanning 4.0 through the bundled 4.3.3. Arbitrary-value canonicalization relies on Tailwind's `designSystem.canonicalizeCandidates` engine, a v4 API. No v3 compatibility is documented in the README or changelog, so treat NormWind as a v4-only tool unless a future release states otherwise. If the scanned project's own installed `tailwindcss` is not v4, NormWind exits `2` with a one-line message and does not audit or rewrite it.
 
 **How is it different from `prettier-plugin-tailwindcss`?**
 Tailwind's own Prettier plugin sorts class names into a recommended order; by its own documentation it doesn't merge shorthand or touch arbitrary values. NormWind does the opposite job: it collapses verbose combinations like `px-4 py-4` into `p-4` and rewrites arbitrary values like `rounded-[24px]` into `rounded-3xl`. The two tools solve different problems and can be used together.

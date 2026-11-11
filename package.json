@@ -60,8 +60,8 @@
     "class-normalization"
   ],
   "dependencies": {
-    "@babel/parser": "8.1.0",
-    "tailwindcss": "4.3.5"
+    "@babel/parser": "8.0.7",
+    "tailwindcss": "4.3.3"
   },
   "publishConfig": {
     "access": "public"

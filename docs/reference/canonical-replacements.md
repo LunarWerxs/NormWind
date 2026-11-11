@@ -3,7 +3,7 @@
 This file is generated from Tailwind's canonicalization engine.
 
 - Source engine: `tailwindcss.designSystem.canonicalizeCandidates`
-- Tailwind version: `4.3.5`
+- Tailwind version: `4.3.3`
 - Class list scanned: `23286`
 - Canonical replacements extracted: `12438`
 
