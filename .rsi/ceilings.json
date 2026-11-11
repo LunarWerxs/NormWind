@@ -4,5 +4,11 @@
   "commit": "e033939808b654ef90e4a6cdd870b05ba07d4484",
   "trial": "20261006-package-shipped-bytes-f800",
   "value": 1653046
+ },
+ "tests.unit_passing": {
+  "at": "2026-11-11T10:59:17+00:00",
+  "commit": "bb836c902348d3b59ab61ada0d29ff6680bc0ddb",
+  "trial": "20261111-tests-unit-passing-03a8",
+  "value": 89
  }
 }
