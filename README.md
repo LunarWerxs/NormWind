@@ -17,6 +17,8 @@
 <strong>Normalize Tailwinds.</strong><br/>
 A zero-config CLI and GitHub Action that finds bloated Tailwind utility classes and rewrites them into their short, canonical form.
 
+**Free and MIT-licensed.** Website: [normwind.lunarwerx.com](https://normwind.lunarwerx.com/).
+
 </div>
 
 ---
