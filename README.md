@@ -160,6 +160,8 @@ NormWind only audits and rewrites Tailwind CSS v4. If the scanned project's own 
 ### ⚠️ Limits
 
 - **Physical pairs and writing modes.** Physical pairs merged into logical utilities (`ml-2 mr-2` -> `mx-2`, `pl`/`pr` -> `px`) are identical in horizontal writing modes. In vertical writing modes (`writing-mode: vertical-*`), the inline axis is vertical, so the two forms can differ. Check those elements by hand.
+- **Cold-cache cost is accepted.** A run with no disk cache (every CI run) loads Tailwind once for engine-collapse and merge-safety checks. Measured on the bundled fixtures (24 projects, one machine): about 11 s cold against about 7 s warm. That is a fixed per-run cost, not one that grows per file, so the fix pass stays sequential and no parallel path is planned.
+- **No lint or typecheck step by design.** The code is plain `.mjs` with no build step; correctness rests on the unit tests, the fixture harness, the precision gate and the regression gate (`npm test`). A `tsc --checkJs` pass is not planned.
 - **Merge safety is per string literal.** Sibling strings inside one `cn()` or `clsx()` call are not compared with each other. A conflict split across two strings is not caught unless you use `twMerge`.
 
 ## 🎛️ CLI reference
