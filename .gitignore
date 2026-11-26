@@ -25,7 +25,7 @@ test/fixtures/**/actual.*
 # editor / refactor backups
 *.bak
 
-# Generated agent code map (local artifact; rebuild with ~/.claude/tools/codemap.py)
+# Generated agent code map (local artifact; rebuild with D:/NEWProjects/shared/claude-memory/home/tools/codemap.py)
 .claude/codemap/
 
 # ⛔ PUBLIC REPO: the to-do list is not published (owner directive, 2026-08-29).
